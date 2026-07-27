@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>진로상담 관리 · Career Counseling</title>
+  <meta name="description" content="학생 진로상담 기록을 관리하는 웹 애플리케이션" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎓</text></svg>" />
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 사이드바 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__brand">
+        <div class="sidebar__logo">🎓</div>
+        <div class="sidebar__brand-text">
+          <strong>진로상담 관리</strong>
+          <span>Career Counseling</span>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav" aria-label="주 메뉴"></nav>
+
+      <div class="sidebar__footer">
+        <button class="theme-toggle" id="themeToggle" type="button" title="테마 전환">
+          <span class="theme-toggle__icon" aria-hidden="true">◐</span>
+          <span class="theme-toggle__label">테마 전환</span>
+        </button>
+        <p class="sidebar__note">데이터는 이 브라우저에만 저장됩니다.</p>
+      </div>
+    </aside>
+
+    <div class="sidebar-scrim" id="sidebarScrim" hidden></div>
+
+    <!-- 본문 -->
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn topbar__menu" id="menuToggle" type="button" aria-label="메뉴 열기">☰</button>
+        <span class="topbar__title" id="topbarTitle">대시보드</span>
+      </header>
+      <main class="content" id="view" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <div class="modal-root" id="modalRoot" hidden></div>
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <script type="module" src="assets/js/app.js"></script>
+</body>
+</html>
