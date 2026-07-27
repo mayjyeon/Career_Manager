@@ -211,8 +211,7 @@ export function render(container, { navigate }) {
     </section>`;
 
   container.querySelector("#pick-student").addEventListener("change", (event) => {
-    const value = event.target.value;
-    selectedId = value ? Number(value) : null;
+    selectedId = event.target.value || null;
     rerender();
   });
 

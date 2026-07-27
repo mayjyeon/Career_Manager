@@ -717,6 +717,171 @@ button { cursor: pointer; }
 }
 
 /* =========================================================
+   시작 화면 · 로그인
+   ========================================================= */
+.boot {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: var(--bg);
+}
+
+.boot__spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.boot__text { font-size: 13.5px; color: var(--text-muted); }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.auth__card {
+  width: 100%;
+  max-width: 400px;
+  padding: 40px 32px 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+.auth__card--wide { max-width: 540px; text-align: left; }
+
+.auth__logo {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 18px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  font-size: 28px;
+}
+.auth__card--wide .auth__logo { margin-left: 0; }
+
+.auth__title {
+  margin: 0 0 10px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.auth__desc {
+  margin: 0 0 26px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.btn-google:not(:disabled):hover { background: var(--hover); border-color: var(--text-faint); }
+.btn-google:disabled { opacity: 0.6; }
+.btn-google__icon { width: 18px; height: 18px; flex: 0 0 18px; }
+
+.auth__error {
+  margin: 18px 0 0;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.auth__note {
+  margin: 20px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.auth__steps {
+  margin: 22px 0 0;
+  padding-left: 20px;
+  font-size: 13.5px;
+  line-height: 1.9;
+  color: var(--text-muted);
+}
+.auth__steps code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-alt);
+  font-size: 12.5px;
+}
+.auth__steps a { color: var(--accent); }
+
+/* =========================================================
+   사이드바 사용자 정보
+   ========================================================= */
+.user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.user__photo {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-alt);
+}
+
+.user__text { min-width: 0; display: flex; flex-direction: column; }
+
+.user__name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user__email {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* =========================================================
    반응형
    ========================================================= */
 @media (max-width: 900px) {

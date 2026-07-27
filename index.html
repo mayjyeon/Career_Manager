@@ -9,7 +9,55 @@
   <link rel="stylesheet" href="assets/css/style.css" />
 </head>
 <body>
-  <div class="app">
+  <!-- 시작 화면(로그인 상태를 확인하는 동안) -->
+  <div class="boot" id="boot">
+    <div class="boot__spinner" aria-hidden="true"></div>
+    <p class="boot__text" id="bootText">불러오는 중…</p>
+  </div>
+
+  <!-- 로그인 화면 -->
+  <div class="auth" id="authScreen" hidden>
+    <div class="auth__card">
+      <div class="auth__logo" aria-hidden="true">🎓</div>
+      <h1 class="auth__title">진로상담 관리</h1>
+      <p class="auth__desc">
+        Google 계정으로 로그인하면 학생 정보와 상담 기록이<br />
+        내 계정에 안전하게 저장됩니다.
+      </p>
+
+      <button class="btn-google" id="googleSignIn" type="button">
+        <svg class="btn-google__icon" viewBox="0 0 18 18" aria-hidden="true">
+          <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z" />
+          <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.84.86-3.05.86-2.35 0-4.34-1.58-5.05-3.71H.96v2.33A9 9 0 0 0 9 18z" />
+          <path fill="#FBBC05" d="M3.95 10.71a5.41 5.41 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l2.99-2.33z" />
+          <path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.96l2.99 2.33C4.66 5.16 6.65 3.58 9 3.58z" />
+        </svg>
+        <span>Google 계정으로 로그인</span>
+      </button>
+
+      <p class="auth__error" id="authError" hidden></p>
+      <p class="auth__note">상담 기록은 로그인한 본인만 볼 수 있습니다.</p>
+    </div>
+  </div>
+
+  <!-- Firebase 설정이 없을 때 안내 화면 -->
+  <div class="auth" id="setupScreen" hidden>
+    <div class="auth__card auth__card--wide">
+      <div class="auth__logo" aria-hidden="true">⚙️</div>
+      <h1 class="auth__title">Firebase 설정이 필요합니다</h1>
+      <p class="auth__error" id="setupMessage"></p>
+      <ol class="auth__steps">
+        <li><a href="https://console.firebase.google.com/" target="_blank" rel="noopener">Firebase Console</a>에서 프로젝트를 만들고 웹 앱을 등록합니다.</li>
+        <li>Authentication → Sign-in method 에서 <b>Google</b> 로그인을 사용 설정합니다.</li>
+        <li>Firestore Database 를 만들고 <code>firestore.rules</code> 의 보안 규칙을 적용합니다.</li>
+        <li><code>assets/js/firebase-config.example.js</code> 를 <code>firebase-config.js</code> 로 복사해 값을 채웁니다.</li>
+      </ol>
+      <p class="auth__note">자세한 순서는 저장소의 README.md 를 참고하세요.</p>
+    </div>
+  </div>
+
+  <!-- 본 애플리케이션 -->
+  <div class="app" id="app" hidden>
     <!-- 사이드바 -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
@@ -23,11 +71,25 @@
       <nav class="nav" id="nav" aria-label="주 메뉴"></nav>
 
       <div class="sidebar__footer">
+        <div class="user">
+          <img class="user__photo" id="userPhoto" alt="" width="32" height="32" hidden />
+          <div class="user__text">
+            <strong class="user__name" id="userName"></strong>
+            <span class="user__email" id="userEmail"></span>
+          </div>
+        </div>
+
         <button class="theme-toggle" id="themeToggle" type="button" title="테마 전환">
           <span class="theme-toggle__icon" aria-hidden="true">◐</span>
           <span class="theme-toggle__label">테마 전환</span>
         </button>
-        <p class="sidebar__note">데이터는 이 브라우저에만 저장됩니다.</p>
+
+        <button class="theme-toggle" id="signOutBtn" type="button">
+          <span class="theme-toggle__icon" aria-hidden="true">↩</span>
+          <span class="theme-toggle__label">로그아웃</span>
+        </button>
+
+        <p class="sidebar__note">데이터는 Google 계정에 저장됩니다.</p>
       </div>
     </aside>
 
@@ -46,6 +108,23 @@
   <div class="modal-root" id="modalRoot" hidden></div>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
+  <script>
+    // 스크립트(Firebase SDK 포함)를 못 받아오면 시작 화면에서 멈추므로,
+    // 일정 시간 안에 app.js 가 뜨지 않으면 이유를 안내합니다.
+    (function () {
+      var timer = setTimeout(function () {
+        var boot = document.getElementById("boot");
+        if (!boot || boot.hidden) return;
+        boot.querySelector(".boot__spinner").hidden = true;
+        document.getElementById("bootText").textContent =
+          "앱을 불러오지 못했습니다. 네트워크 연결을 확인한 뒤 새로고침해주세요.";
+      }, 15000);
+
+      window.appDidLoad = function () {
+        clearTimeout(timer);
+      };
+    })();
+  </script>
   <script type="module" src="assets/js/app.js"></script>
 </body>
 </html>
