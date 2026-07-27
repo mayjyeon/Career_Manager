@@ -13,10 +13,10 @@
  * 명령으로도 환경 변수에서 생성할 수 있습니다.
  */
 export const firebaseConfig = {
-  apiKey: "AIzaSy...",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project",
+  apiKey: "AIzaSyD94VEewH3D9z4H_KPXHTDT1K1zAznD5j0",
+  authDomain: "career-manager-ffaab.firebaseapp.com",
+  projectId: "career-manager-ffaab",
   storageBucket: "your-project.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:0000000000000000000000",
+  messagingSenderId: "247290865510",
+  appId: "1:247290865510:web:b5edec859eee9bf8f80aa7",
 };
