@@ -236,14 +236,14 @@ export function render(container) {
 
   container.querySelectorAll("[data-edit]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      const data = studentService.getEditData(Number(btn.dataset.edit));
+      const data = studentService.getEditData(btn.dataset.edit);
       if (data) openStudentForm(data, rerender);
     })
   );
 
   container.querySelectorAll("[data-deactivate]").forEach((btn) =>
     btn.addEventListener("click", async () => {
-      const id = Number(btn.dataset.deactivate);
+      const id = btn.dataset.deactivate;
       const student = items.find((s) => s.id === id);
       if (!student) return;
 

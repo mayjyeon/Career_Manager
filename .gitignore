@@ -1,0 +1,11 @@
+# Firebase 웹 설정값 (GitHub Actions 가 배포할 때 자동 생성합니다)
+assets/js/firebase-config.js
+
+# 로컬 개발용 환경 변수
+.env
+.env.local
+
+# Firebase CLI
+.firebase/
+firebase-debug.log
+firestore-debug.log

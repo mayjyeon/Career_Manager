@@ -3,7 +3,7 @@
  * 원본의 CareerCounseling.Wpf/Services/StudentService.cs,
  * CounselingService.cs 를 그대로 옮긴 것입니다.
  */
-import { students, schoolYears, sessions, commit } from "./store.js";
+import { students, schoolYears, sessions } from "./store.js";
 
 /** 가장 최근 학년도의 소속 정보를 돌려줍니다. */
 function latestSchoolYear(studentId) {
@@ -116,7 +116,6 @@ export const studentService = {
       classNo,
       studentNo,
     });
-    commit();
 
     return { ok: true, error: null };
   },
@@ -140,21 +139,15 @@ export const studentService = {
       return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
     }
 
-    student.name = name;
-    student.memo = memo;
-    student.updatedAt = new Date().toISOString();
+    students.update(id, { name, memo });
 
     const sy = latestSchoolYear(id);
     if (!sy) {
       schoolYears.add({ studentId: id, schoolYear, grade, classNo, studentNo });
     } else {
-      sy.schoolYear = schoolYear;
-      sy.grade = grade;
-      sy.classNo = classNo;
-      sy.studentNo = studentNo;
+      schoolYears.update(sy.id, { schoolYear, grade, classNo, studentNo });
     }
 
-    commit();
     return { ok: true, error: null };
   },
 
@@ -163,9 +156,7 @@ export const studentService = {
     const student = students.find(id);
     if (!student) return;
 
-    student.isActive = false;
-    student.updatedAt = new Date().toISOString();
-    commit();
+    students.update(id, { isActive: false });
   },
 
   getActiveCount() {
@@ -195,7 +186,9 @@ export const counselingService = {
       .all()
       .slice()
       .sort(
-        (a, b) => new Date(b.sessionDate) - new Date(a.sessionDate) || b.id - a.id
+        (a, b) =>
+          new Date(b.sessionDate) - new Date(a.sessionDate) ||
+          String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
       )
       .slice(0, count)
       .map((session) => ({
@@ -217,7 +210,6 @@ export const counselingService = {
       nextPlan,
     });
 
-    commit();
     return nextNo;
   },
 
