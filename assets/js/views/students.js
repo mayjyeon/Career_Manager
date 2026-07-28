@@ -1,5 +1,6 @@
-/** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드. */
+/** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드, 학생 계정 연결 확인. */
 import { studentService } from "../services.js";
+import { profiles } from "../board.js";
 import { readSpreadsheet, SheetError } from "../sheet.js";
 import { parseRoster, buildImportPlan } from "../roster.js";
 import {
@@ -304,6 +305,78 @@ async function handleRosterFile(file, onSaved) {
   }
 }
 
+/* =========================================================
+   학생 계정 연결 확인
+   ========================================================= */
+const LINK_STATUS = {
+  matched: `<span class="badge badge--success">연결됨</span>`,
+  nameMismatch: `<span class="badge badge--warning">이름 다름</span>`,
+  notFound: `<span class="badge badge--danger">명렬표에 없음</span>`,
+};
+
+/**
+ * 학생이 스스로 적은 정보를 명렬표와 맞춰 봅니다.
+ * 학생 계정은 각자 로그인해 등록하므로, 잘못 적은 경우를 여기서 찾습니다.
+ */
+function accountSection() {
+  const accounts = profiles
+    .all()
+    .map((profile) => ({ profile, ...studentService.matchProfile(profile) }))
+    .sort(
+      (a, b) =>
+        (a.profile.grade ?? 0) - (b.profile.grade ?? 0) ||
+        (a.profile.classNo ?? 0) - (b.profile.classNo ?? 0) ||
+        (a.profile.studentNo ?? 0) - (b.profile.studentNo ?? 0)
+    );
+
+  if (accounts.length === 0) return "";
+
+  const problems = accounts.filter((row) => row.status !== "matched").length;
+
+  const rows = accounts
+    .map(
+      ({ profile, status, student }) => `
+      <tr>
+        <td>${LINK_STATUS[status]}</td>
+        <td class="nowrap">${profile.grade}학년 ${profile.classNo}반 ${profile.studentNo}번</td>
+        <td>${esc(profile.name)}</td>
+        <td class="caption">${esc(profile.email ?? "")}</td>
+        <td class="caption">
+          ${
+            status === "nameMismatch"
+              ? `명렬표에는 ‘${esc(student.name)}’ 학생입니다.`
+              : status === "notFound"
+                ? "그 자리에 등록된 학생이 없습니다."
+                : ""
+          }
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  return `
+    <section class="card card--flush" style="margin-top:16px">
+      <div class="card__head">
+        <h2 class="section-title">학생 계정 연결</h2>
+        <span class="caption">
+          ${accounts.length}명 등록${problems ? ` · 확인 필요 ${problems}명` : ""}
+        </span>
+      </div>
+      <div class="table-wrap">
+        <table class="table table--compact">
+          <thead>
+            <tr><th>상태</th><th>자리</th><th>이름</th><th>계정</th><th>안내</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <p class="caption" style="padding:0 18px 16px">
+        학생이 직접 적은 값이라 틀릴 수 있습니다. ‘이름 다름’ 이나 ‘명렬표에 없음’ 은
+        학생에게 다시 확인해 주세요.
+      </p>
+    </section>`;
+}
+
 export function render(container) {
   const grade = Number.parseInt(filter.grade, 10);
   const classNo = Number.parseInt(filter.classNo, 10);
@@ -380,7 +453,9 @@ export function render(container) {
                 : `<button class="btn btn--primary" data-add>+ 학생 추가</button>`,
             })
       }
-    </section>`;
+    </section>
+
+    ${accountSection()}`;
 
   /* --- 이벤트 --- */
   const form = container.querySelector("[data-search]");

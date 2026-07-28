@@ -84,6 +84,28 @@ export const studentService = {
     return student ? { id: student.id, name: student.name } : null;
   },
 
+  /**
+   * 학생이 스스로 적은 정보가 명렬표의 누구인지 맞춰 봅니다.
+   * 학년도는 학생이 적지 않으므로 학년·반·번호만 봅니다.
+   *
+   * @returns {{ status: "matched"|"nameMismatch"|"notFound", student: object|null }}
+   */
+  matchProfile({ grade, classNo, studentNo, name }) {
+    const seats = schoolYears
+      .all()
+      .filter((y) => y.grade === grade && y.classNo === classNo && y.studentNo === studentNo)
+      // 여러 학년도에 같은 자리가 있으면 최근 것을 봅니다.
+      .sort((a, b) => (b.schoolYear ?? 0) - (a.schoolYear ?? 0));
+
+    for (const seat of seats) {
+      const student = students.find(seat.studentId);
+      if (student && student.name === name) return { status: "matched", student };
+    }
+
+    const student = seats.length ? students.find(seats[0].studentId) : null;
+    return student ? { status: "nameMismatch", student } : { status: "notFound", student: null };
+  },
+
   /** 수정 폼에 채워 넣을 데이터. */
   getEditData(id) {
     const student = students.find(id);

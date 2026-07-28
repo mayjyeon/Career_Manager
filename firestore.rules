@@ -3,9 +3,13 @@ rules_version = '2';
 /**
  * 진로상담 관리 — Firestore 보안 규칙
  *
- * 모든 데이터는 users/{uid} 아래에만 저장하며,
- * 로그인한 본인만 자기 데이터를 읽고 쓸 수 있습니다.
- * 그 밖의 모든 경로는 기본 거부됩니다.
+ * 두 종류의 자료가 있습니다.
+ *
+ *   users/{uid}/…   상담 기록. 선생님 계정 안에만 있고 본인만 읽고 씁니다.
+ *   그 밖의 컬렉션   공지·과제·제출물·포트폴리오. 선생님과 학생이 함께 봅니다.
+ *
+ * 선생님은 아래 이메일로 로그인한 계정 하나뿐입니다.
+ * 이 값을 바꿀 때는 assets/js/roles.js 의 TEACHER_EMAIL 도 함께 고쳐야 합니다.
  *
  * 적용:
  *   firebase deploy --only firestore:rules
@@ -14,21 +18,85 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isTeacher() {
+      return signedIn() && request.auth.token.email == 'mayjyeon52@gmail.com';
+    }
+
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return signedIn() && request.auth.uid == userId;
     }
 
     function isKnownCollection(name) {
       return name in ['students', 'schoolYears', 'sessions'];
     }
 
-    // 학생 · 학년도 소속 · 상담 기록
+    /* ---------------------------------------------------------
+       상담 기록 — 선생님 계정 안에만 있습니다.
+       --------------------------------------------------------- */
     match /users/{userId}/{collectionName}/{docId} {
       allow read: if isOwner(userId) && isKnownCollection(collectionName);
       allow create, update: if isOwner(userId)
         && isKnownCollection(collectionName)
         && request.resource.data.keys().size() <= 20;
       allow delete: if isOwner(userId) && isKnownCollection(collectionName);
+    }
+
+    /* ---------------------------------------------------------
+       학생 정보 — 학생이 스스로 등록하고, 선생님은 전부 봅니다.
+       문서 번호는 계정 번호(uid)와 같습니다.
+       --------------------------------------------------------- */
+    match /profiles/{uid} {
+      allow read: if isOwner(uid) || isTeacher();
+      allow create, update: if isOwner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 20
+        && request.resource.data.grade is int
+        && request.resource.data.classNo is int
+        && request.resource.data.studentNo is int;
+      allow delete: if isOwner(uid) || isTeacher();
+    }
+
+    /* ---------------------------------------------------------
+       공지사항 · 과제 — 선생님만 쓰고, 로그인한 사람은 모두 읽습니다.
+
+       공개 대상(학년·반)은 화면에서 걸러 보여줄 뿐 비밀은 아닙니다.
+       학생에게 보이면 안 되는 내용은 올리지 마세요.
+       --------------------------------------------------------- */
+    match /notices/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    match /assignments/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    /* ---------------------------------------------------------
+       제출물 · 포트폴리오 — 낸 학생 본인과 선생님만 봅니다.
+       다른 학생은 목록에서도 볼 수 없습니다.
+       --------------------------------------------------------- */
+    match /submissions/{docId} {
+      allow read: if isTeacher() || isOwner(resource.data.studentUid);
+      allow create: if isOwner(request.resource.data.studentUid)
+        && request.resource.data.assignmentId is string;
+      allow update: if isOwner(resource.data.studentUid)
+        && request.resource.data.studentUid == resource.data.studentUid;
+      allow delete: if isOwner(resource.data.studentUid) || isTeacher();
+    }
+
+    match /portfolios/{docId} {
+      allow read: if isTeacher() || isOwner(resource.data.studentUid);
+      allow create: if isOwner(request.resource.data.studentUid);
+      allow update: if isOwner(resource.data.studentUid)
+        && request.resource.data.studentUid == resource.data.studentUid;
+      allow delete: if isOwner(resource.data.studentUid) || isTeacher();
     }
   }
 }
