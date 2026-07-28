@@ -5,9 +5,8 @@
  * 색은 style.css 에 정의한 --series-1..3 을 쓰며, 라이트·다크 모두에서
  * 색약으로도 구분되는지 확인한 값입니다.
  *
- * 막대는 HTML 로, 꺾은선만 SVG 로 그립니다.
- * SVG 를 가로로 늘리면 그 안의 글자까지 늘어나 겹치므로,
- * 축 이름과 범례는 언제나 SVG 밖 HTML 에 둡니다.
+ * 막대는 HTML 로 그립니다. SVG 를 가로로 늘리면 그 안의 글자까지 늘어나
+ * 축 이름이 서로 겹치기 때문입니다.
  *
  * 모든 차트는 값을 그대로 읽을 수 있는 표를 함께 내놓습니다.
  * 색이나 마우스 올리기에만 기대지 않기 위함입니다.
@@ -15,7 +14,7 @@
 import { esc } from "./ui.js";
 
 /** 계열 색. 순서를 바꾸면 안 됩니다(이 순서로 색약 판별을 확인했습니다). */
-export const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
 
 const number = (value) => new Intl.NumberFormat("ko-KR").format(Math.round(value * 10) / 10);
 
@@ -130,79 +129,6 @@ export function shareBar({ items, unit = "건" }) {
   return `
     <div class="share-bar" role="img"
          aria-label="${esc(items.map((i) => `${i.label} ${i.value}${unit}`).join(", "))}">${segments}</div>
-    <ul class="legend">${legend}</ul>`;
-}
-
-/* =========================================================
-   꺾은선 — 시간에 따른 여러 계열을 견줍니다.
-   ========================================================= */
-/** 그림 영역의 좌표 크기. 화면 크기와 상관없이 이 안에서 그립니다. */
-const PLOT = { width: 100, height: 40 };
-
-/**
- * @param {Array<{ name: string, values: number[] }>} series
- * @param {string[]} labels x축 이름
- */
-export function lineChart({ series, labels, unit = "", title = "" }) {
-  const all = series.flatMap((s) => s.values);
-  if (all.length === 0) return emptyBox("표시할 자료가 없습니다.");
-
-  const top = niceMax(scaleMax(all));
-  const count = Math.max(...series.map((s) => s.values.length));
-  const stepX = count > 1 ? PLOT.width / (count - 1) : 0;
-
-  const grid = [0, 0.5, 1]
-    .map((ratio) => {
-      const y = (PLOT.height - ratio * PLOT.height).toFixed(2);
-      return `<line class="chart__grid" x1="0" y1="${y}" x2="${PLOT.width}" y2="${y}" />`;
-    })
-    .join("");
-
-  const lines = series
-    .map((s, index) => {
-      const color = SERIES[index % SERIES.length];
-      const points = s.values
-        .map((value, i) => `${(i * stepX).toFixed(2)},${(PLOT.height - (value / top) * PLOT.height).toFixed(2)}`)
-        .join(" ");
-
-      const last = s.values.length - 1;
-      return `
-        <polyline class="chart__line" points="${points}" stroke="${color}" />
-        <circle class="chart__dot" cx="${(last * stepX).toFixed(2)}"
-                cy="${(PLOT.height - (s.values[last] / top) * PLOT.height).toFixed(2)}"
-                r="0.9" fill="${color}" />`;
-    })
-    .join("");
-
-  // 눈금 이름이 겹치지 않도록 양 끝만 답니다.
-  const ticks =
-    labels.length > 1
-      ? `<div class="plot__ticks">
-           <span>${esc(labels[0])}</span>
-           <span>${esc(labels[labels.length - 1])}</span>
-         </div>`
-      : `<div class="plot__ticks"><span>${esc(labels[0] ?? "")}</span></div>`;
-
-  const legend = series
-    .map(
-      (s, index) => `
-      <li class="legend__item">
-        <span class="legend__swatch" style="background:${SERIES[index % SERIES.length]}"></span>
-        <span>${esc(s.name)}</span>
-        <b>${number(s.values.reduce((a, b) => a + b, 0))}${esc(unit)}</b>
-      </li>`
-    )
-    .join("");
-
-  return `
-    <div class="plot">
-      <span class="plot__max">${number(top)}${esc(unit)}</span>
-      <svg class="chart" viewBox="0 0 ${PLOT.width} ${PLOT.height}" preserveAspectRatio="none"
-           role="img" aria-label="${esc(title || "꺾은선 그래프")}">
-        ${grid}${lines}
-      </svg>
-      ${ticks}
-    </div>
     <ul class="legend">${legend}</ul>`;
 }
 

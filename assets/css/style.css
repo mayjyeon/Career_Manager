@@ -34,8 +34,6 @@
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
-  --chart-grid: #e8ebf0;
-  --chart-axis: #d9dee7;
 
   --hover: #f0f2f5;
 
@@ -79,8 +77,6 @@
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
-  --chart-grid: #272e3b;
-  --chart-axis: #333c4c;
 
   --hover: #232a36;
 
@@ -607,36 +603,6 @@ button { cursor: pointer; }
   color: var(--text-muted);
   white-space: nowrap;
 }
-
-/* 꺾은선 — 선만 SVG 로 그리고 글자는 바깥에 둡니다. */
-.plot { position: relative; }
-.plot__max {
-  display: block;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-bottom: 2px;
-}
-
-.plot__ticks {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
-
-.chart { display: block; width: 100%; height: 130px; }
-
-.chart__grid { stroke: var(--chart-grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
-
-.chart__line {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-.chart__dot { stroke: var(--surface); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
 .chart-empty {
   margin: 0;
