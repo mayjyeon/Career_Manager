@@ -3,7 +3,7 @@
  * 원본의 CareerCounseling.Wpf/Services/StudentService.cs,
  * CounselingService.cs 를 그대로 옮긴 것입니다.
  */
-import { students, schoolYears, sessions } from "./store.js";
+import { students, schoolYears, sessions, commitAll, newId } from "./store.js";
 
 /** 가장 최근 학년도의 소속 정보를 돌려줍니다. */
 function latestSchoolYear(studentId) {
@@ -75,6 +75,15 @@ export const studentService = {
     );
   },
 
+  /** 같은 학년도/학년/반/번호 자리에 이미 있는 학생을 찾습니다. */
+  findSeat(key) {
+    const seat = schoolYears.findSeat(key);
+    if (!seat) return null;
+
+    const student = students.find(seat.studentId);
+    return student ? { id: student.id, name: student.name } : null;
+  },
+
   /** 수정 폼에 채워 넣을 데이터. */
   getEditData(id) {
     const student = students.find(id);
@@ -93,7 +102,7 @@ export const studentService = {
     };
   },
 
-  add(schoolYear, grade, classNo, studentNo, name, memo) {
+  add(schoolYear, grade, classNo, studentNo, name, memo, gender = null) {
     const exists = schoolYears
       .all()
       .some(
@@ -108,7 +117,7 @@ export const studentService = {
       return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
     }
 
-    const student = students.add({ name, memo });
+    const student = students.add({ name, gender, memo });
     schoolYears.add({
       studentId: student.id,
       schoolYear,
@@ -118,6 +127,63 @@ export const studentService = {
     });
 
     return { ok: true, error: null };
+  },
+
+  /**
+   * 명렬표에서 읽은 학생들을 한 번에 등록합니다.
+   *
+   * @param {Array<{ action: "add"|"overwrite"|"skip", schoolYear, grade, classNo,
+   *                 studentNo, name, gender, memo, existingId }>} rows
+   * @returns {Promise<{ added: number, updated: number, skipped: number }>}
+   */
+  async importRoster(rows) {
+    const operations = [];
+    let added = 0;
+    let updated = 0;
+
+    for (const row of rows) {
+      if (row.action === "add") {
+        // 소속에서 학생을 가리켜야 해서 문서 번호를 미리 받아 둡니다.
+        const studentId = newId("students");
+
+        operations.push({
+          collection: "students",
+          id: studentId,
+          fields: students.fields({ name: row.name, gender: row.gender, memo: row.memo }),
+        });
+
+        operations.push({
+          collection: "schoolYears",
+          id: newId("schoolYears"),
+          fields: {
+            studentId,
+            schoolYear: row.schoolYear,
+            grade: row.grade,
+            classNo: row.classNo,
+            studentNo: row.studentNo,
+            status: "재학",
+          },
+        });
+
+        added += 1;
+      } else if (row.action === "overwrite" && row.existingId) {
+        operations.push({
+          collection: "students",
+          id: row.existingId,
+          mode: "update",
+          fields: {
+            name: row.name,
+            gender: row.gender,
+            updatedAt: new Date().toISOString(),
+          },
+        });
+        updated += 1;
+      }
+    }
+
+    if (operations.length) await commitAll(operations);
+
+    return { added, updated, skipped: rows.length - added - updated };
   },
 
   update(id, schoolYear, grade, classNo, studentNo, name, memo) {
@@ -197,20 +263,61 @@ export const counselingService = {
       }));
   },
 
-  add(studentId, date, category, content, followUp, nextPlan) {
+  add(studentId, date, category, content, followUp, nextPlan, durationMinutes = null) {
     const nextNo = sessions.forStudent(studentId).length + 1;
 
     sessions.add({
       studentId,
       sessionDate: date,
       sessionNo: nextNo,
-      category: category && category.trim() ? category.trim() : "진로상담",
+      category: category && category.trim() ? category.trim() : "진로",
+      durationMinutes,
       content,
       followUpAction: followUp,
       nextPlan,
     });
 
     return nextNo;
+  },
+
+  /**
+   * 기간 안의 상담 기록을 학생 정보와 함께 날짜순으로 돌려줍니다.
+   * 진로상담총괄표 내보내기에 씁니다.
+   *
+   * @param {string} from yyyy-MM-dd (포함)
+   * @param {string} to   yyyy-MM-dd (포함)
+   */
+  getInRange(from, to) {
+    const start = new Date(`${from}T00:00:00`).getTime();
+    const end = new Date(`${to}T23:59:59.999`).getTime();
+
+    return sessions
+      .all()
+      .filter((session) => {
+        const time = new Date(session.sessionDate).getTime();
+        return !Number.isNaN(time) && time >= start && time <= end;
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.sessionDate) - new Date(b.sessionDate) ||
+          String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
+      )
+      .map((session) => {
+        const student = students.find(session.studentId);
+        const sy = student ? latestSchoolYear(student.id) : null;
+
+        return {
+          ...session,
+          student: student
+            ? {
+                name: student.name,
+                grade: sy?.grade ?? null,
+                classNo: sy?.classNo ?? null,
+                studentNo: sy?.studentNo ?? null,
+              }
+            : null,
+        };
+      });
   },
 
   getTotalCount() {

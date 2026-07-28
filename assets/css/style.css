@@ -268,6 +268,13 @@ button { cursor: pointer; }
 /* =========================================================
    페이지 헤더 · 타이포그래피
    ========================================================= */
+.page-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .page-head {
   display: flex;
   align-items: flex-end;
@@ -431,8 +438,35 @@ button { cursor: pointer; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
+.form-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .form-grid .span-2 { grid-column: span 2; }
+
+/* 모달 안에서 작게 쓰는 선택 상자 */
+.select--sm {
+  padding: 5px 26px 5px 9px;
+  font-size: 13px;
+  min-height: 0;
+  background-position: right 8px center;
+}
+
+/* 명렬표 미리보기 */
+.import-summary {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.import-summary b { color: var(--text); }
+
+.import-bulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
 
 /* 검색 바 */
 .filter-bar {
@@ -486,6 +520,25 @@ button { cursor: pointer; }
 .table .num { text-align: right; white-space: nowrap; }
 .table .actions { text-align: right; white-space: nowrap; }
 .table .actions .btn + .btn { margin-left: 6px; }
+.table .nowrap { white-space: nowrap; }
+
+/* 명렬표 미리보기처럼 줄이 많은 표 */
+.table--compact { font-size: 13px; }
+.table--compact th { padding: 9px 12px; }
+.table--compact td { padding: 8px 12px; }
+
+.table-wrap--scroll {
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.table-wrap--scroll .table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 
 /* 학생 셀 */
 .person { display: flex; align-items: center; gap: 12px; }
@@ -898,6 +951,7 @@ button { cursor: pointer; }
   .content { padding: 20px 16px 40px; }
   .page-head { align-items: flex-start; }
   .form-grid,
+  .form-grid--3,
   .form-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form-grid .span-2 { grid-column: span 2; }
   .toast-stack { left: 16px; right: 16px; }
@@ -906,11 +960,16 @@ button { cursor: pointer; }
 
 @media (max-width: 520px) {
   .form-grid,
+  .form-grid--3,
   .form-grid--4 { grid-template-columns: 1fr; }
   .form-grid .span-2 { grid-column: span 1; }
   .filter-bar .field--num { flex: 1 1 92px; }
   .table th:nth-child(3),
   .table td:nth-child(3) { display: none; }
+
+  /* 미리보기 표는 이름 칸을 감추면 안 되므로 되돌립니다. */
+  .table--compact th:nth-child(3),
+  .table--compact td:nth-child(3) { display: table-cell; }
 }
 
 @media (prefers-reduced-motion: reduce) {

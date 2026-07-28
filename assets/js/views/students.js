@@ -1,5 +1,7 @@
-/** 학생 관리 — 검색, 추가, 수정, 비활성화. */
+/** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드. */
 import { studentService } from "../services.js";
+import { readSpreadsheet, SheetError } from "../sheet.js";
+import { parseRoster, buildImportPlan } from "../roster.js";
 import {
   esc,
   initials,
@@ -140,6 +142,168 @@ function openStudentForm(data, onSaved) {
   });
 }
 
+/* =========================================================
+   명렬표 업로드
+   ========================================================= */
+const STATUS_LABEL = {
+  new: `<span class="badge badge--success">신규</span>`,
+  duplicate: `<span class="badge badge--warning">중복</span>`,
+  error: `<span class="badge badge--danger">확인 필요</span>`,
+};
+
+function previewRow(row) {
+  const seat =
+    row.status === "error"
+      ? "—"
+      : `${row.grade}학년 ${row.classNo}반 ${row.studentNo}번`;
+
+  const action =
+    row.status === "duplicate"
+      ? `<select class="select select--sm" data-action-for="${row.index}">
+           <option value="skip">건너뛰기</option>
+           <option value="overwrite">덮어쓰기</option>
+         </select>`
+      : row.status === "new"
+        ? `<span class="caption">등록</span>`
+        : `<span class="caption">제외</span>`;
+
+  return `
+    <tr>
+      <td>${STATUS_LABEL[row.status]}</td>
+      <td class="nowrap">${esc(seat)}</td>
+      <td>${esc(row.name)}</td>
+      <td>${row.gender ? esc(row.gender) : `<span class="caption">—</span>`}</td>
+      <td>${row.message ? `<span class="caption">${esc(row.message)}</span>` : ""}</td>
+      <td class="actions">${action}</td>
+    </tr>`;
+}
+
+function previewBody(parsed, plan) {
+  const count = (status) => plan.filter((row) => row.status === status).length;
+
+  const info = [
+    parsed.schoolYear ? `${parsed.schoolYear}학년도` : null,
+    parsed.grade ? `${parsed.grade}학년` : null,
+    `${parsed.layout} 형식`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return `
+    <p class="import-summary">
+      ${esc(info)}에서 <b>${plan.length}명</b>을 읽었습니다.
+      신규 ${count("new")}명 · 중복 ${count("duplicate")}명 · 확인 필요 ${count("error")}명
+    </p>
+    ${
+      count("duplicate")
+        ? `<div class="import-bulk">
+             <span class="caption">중복된 자리를</span>
+             <button class="btn btn--ghost btn--sm" type="button" data-bulk="skip">모두 건너뛰기</button>
+             <button class="btn btn--ghost btn--sm" type="button" data-bulk="overwrite">모두 덮어쓰기</button>
+           </div>`
+        : ""
+    }
+    <div class="table-wrap table-wrap--scroll">
+      <table class="table table--compact">
+        <thead>
+          <tr>
+            <th>상태</th><th>자리</th><th>이름</th><th>성별</th><th>안내</th><th class="actions">처리</th>
+          </tr>
+        </thead>
+        <tbody>${plan.map(previewRow).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+/** 읽어 들인 명렬표를 확인하고 등록합니다. */
+function openImportPreview(parsed, onSaved) {
+  const plan = buildImportPlan(parsed.entries, (key) => studentService.findSeat(key));
+
+  if (plan.length === 0) {
+    toast("명렬표에서 학생을 찾지 못했습니다. 파일 형식을 확인해주세요.", "error");
+    return;
+  }
+
+  const form = openModal({
+    title: "명렬표 미리보기",
+    subtitle: "등록할 내용을 확인한 뒤 저장하세요.",
+    body: previewBody(parsed, plan),
+    actions: [
+      { label: "취소", variant: "secondary", value: "cancel" },
+      { label: "등록", variant: "primary", value: "submit" },
+    ],
+    onAction: async (action) => {
+      if (action !== "submit") return;
+
+      const rows = plan.filter((row) => row.action !== "skip");
+      if (rows.length === 0) {
+        toast("등록할 학생이 없습니다.");
+        return true;
+      }
+
+      try {
+        const result = await studentService.importRoster(rows);
+        const parts = [
+          result.added ? `${result.added}명 등록` : null,
+          result.updated ? `${result.updated}명 수정` : null,
+        ].filter(Boolean);
+
+        toast(`${parts.join(" · ")}했습니다.`, "success");
+        onSaved();
+      } catch (error) {
+        toast(error?.message ?? "명렬표를 저장하지 못했습니다.", "error");
+      }
+
+      return true;
+    },
+  });
+
+  const selects = form.querySelectorAll("[data-action-for]");
+
+  selects.forEach((select) =>
+    select.addEventListener("change", () => {
+      const row = plan[Number.parseInt(select.dataset.actionFor, 10)];
+      if (row) row.action = select.value;
+    })
+  );
+
+  form.querySelectorAll("[data-bulk]").forEach((button) =>
+    button.addEventListener("click", () => {
+      selects.forEach((select) => {
+        select.value = button.dataset.bulk;
+        select.dispatchEvent(new Event("change"));
+      });
+    })
+  );
+}
+
+/** 업로드한 파일을 읽어 미리보기를 띄웁니다. */
+async function handleRosterFile(file, onSaved) {
+  try {
+    const sheets = await readSpreadsheet(file);
+
+    // 학생이 가장 많이 잡히는 시트를 고릅니다.
+    const parsedSheets = sheets
+      .map((sheet) => parseRoster(sheet.rows))
+      .sort((a, b) => b.entries.length - a.entries.length);
+
+    const parsed = parsedSheets[0];
+
+    if (!parsed || parsed.entries.length === 0) {
+      toast("명렬표에서 학생을 찾지 못했습니다. ‘○반’ 제목과 ‘번호’ 열이 있는지 확인해주세요.", "error");
+      return;
+    }
+
+    openImportPreview(parsed, onSaved);
+  } catch (error) {
+    const message =
+      error instanceof SheetError
+        ? error.message
+        : "파일을 읽지 못했습니다. 엑셀에서 다시 저장한 뒤 시도해주세요.";
+    toast(message, "error");
+  }
+}
+
 export function render(container) {
   const grade = Number.parseInt(filter.grade, 10);
   const classNo = Number.parseInt(filter.classNo, 10);
@@ -159,7 +323,12 @@ export function render(container) {
         <h1 class="page-title">학생 관리</h1>
         <p class="page-subtitle">학생 ${items.length}명이 조회되었습니다.</p>
       </div>
-      <button class="btn btn--primary" data-add>+ 학생 추가</button>
+      <div class="page-head__actions">
+        <button class="btn btn--secondary" data-upload>📄 명렬표 업로드</button>
+        <button class="btn btn--primary" data-add>+ 학생 추가</button>
+        <input type="file" data-roster-file hidden
+               accept=".xlsx,.xlsm,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+      </div>
     </div>
 
     <section class="card" style="margin-bottom:16px">
@@ -233,6 +402,17 @@ export function render(container) {
   container.querySelectorAll("[data-add]").forEach((btn) =>
     btn.addEventListener("click", () => openStudentForm(null, rerender))
   );
+
+  const fileInput = container.querySelector("[data-roster-file]");
+
+  container.querySelector("[data-upload]")?.addEventListener("click", () => fileInput.click());
+
+  fileInput?.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    // 같은 파일을 다시 골라도 change 가 일어나도록 값을 비웁니다.
+    fileInput.value = "";
+    if (file) await handleRosterFile(file, rerender);
+  });
 
   container.querySelectorAll("[data-edit]").forEach((btn) =>
     btn.addEventListener("click", () => {
