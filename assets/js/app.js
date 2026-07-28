@@ -5,14 +5,32 @@
 import { initFirebase, FirebaseConfigError } from "./firebase.js";
 import { signInWithGoogle, signOutUser, watchUser } from "./auth.js";
 import { startSync, stopSync } from "./store.js";
+import { profiles, startBoardSync, stopBoardSync } from "./board.js";
+import { TEACHER, roleOf } from "./roles.js";
 import { closeModal, esc, toast } from "./ui.js";
 import * as dashboard from "./views/dashboard.js";
 import * as students from "./views/students.js";
 import * as counseling from "./views/counseling.js";
-import { calendar, statistics } from "./views/placeholder.js";
+import * as notices from "./views/notices.js";
+import * as assignments from "./views/assignments.js";
+import * as portfolio from "./views/portfolio.js";
+import * as studentHome from "./views/student-home.js";
+import { statistics } from "./views/placeholder.js";
+import { profileFields, readProfileForm } from "./views/profile-form.js";
 
-const views = [dashboard, students, counseling, calendar, statistics];
-const byId = new Map(views.map((v) => [v.meta.id, v]));
+/** 역할에 따라 보이는 메뉴가 다릅니다. */
+const VIEWS = {
+  teacher: [dashboard, students, counseling, notices, assignments, portfolio, statistics],
+  student: [studentHome, notices, assignments, portfolio],
+};
+
+let views = VIEWS.teacher;
+let byId = new Map(views.map((v) => [v.meta.id, v]));
+
+function useViews(role) {
+  views = VIEWS[role] ?? VIEWS.student;
+  byId = new Map(views.map((v) => [v.meta.id, v]));
+}
 
 const elements = {
   boot: document.getElementById("boot"),
@@ -22,6 +40,11 @@ const elements = {
   googleSignIn: document.getElementById("googleSignIn"),
   setupScreen: document.getElementById("setupScreen"),
   setupMessage: document.getElementById("setupMessage"),
+  profileScreen: document.getElementById("profileScreen"),
+  profileForm: document.getElementById("profileForm"),
+  profileFields: document.getElementById("profileFields"),
+  profileError: document.getElementById("profileError"),
+  profileSubmit: document.getElementById("profileSubmit"),
   app: document.getElementById("app"),
   nav: document.getElementById("nav"),
   view: document.getElementById("view"),
@@ -38,6 +61,7 @@ const elements = {
 
 let currentId = null;
 let signedIn = false;
+let currentRole = null;
 
 /* =========================================================
    화면 전환(로그인 · 로딩 · 본문)
@@ -46,6 +70,7 @@ function showScreen(name, message) {
   elements.boot.hidden = name !== "boot";
   elements.authScreen.hidden = name !== "auth";
   elements.setupScreen.hidden = name !== "setup";
+  elements.profileScreen.hidden = name !== "profile";
   elements.app.hidden = name !== "app";
 
   if (name === "boot" && message) elements.bootText.textContent = message;
@@ -132,13 +157,14 @@ function markActive(id) {
 /** 현재 화면만 다시 그립니다(포커스·스크롤은 건드리지 않습니다). */
 function renderCurrentView() {
   if (!currentId) return;
-  const view = byId.get(currentId) ?? dashboard;
+  const view = byId.get(currentId) ?? views[0];
   elements.view.innerHTML = "";
   view.render(elements.view, { navigate });
 }
 
 export function navigate(id, { updateHash = true } = {}) {
-  const view = byId.get(id) ?? dashboard;
+  // 다른 역할의 주소로 들어오면 첫 화면으로 보냅니다.
+  const view = byId.get(id) ?? views[0];
 
   currentId = view.meta.id;
   markActive(currentId);
@@ -213,8 +239,68 @@ function fillUserBox(user) {
   }
 }
 
-/** 로그인 상태가 바뀔 때마다 호출됩니다. */
+/* =========================================================
+   학생 정보 등록(첫 로그인)
+   ========================================================= */
+/** 학생이 학년·반·번호와 이름을 적을 때까지 앱을 열지 않습니다. */
+function askProfile(user) {
+  return new Promise((resolve) => {
+    elements.profileFields.innerHTML = profileFields(null, user);
+    elements.profileError.hidden = true;
+    showScreen("profile");
+    elements.profileFields.querySelector("input")?.focus();
+
+    const onSubmit = async (event) => {
+      event.preventDefault();
+
+      const parsed = readProfileForm(elements.profileForm);
+      if (!parsed.ok) {
+        elements.profileError.textContent = parsed.error;
+        elements.profileError.hidden = false;
+        return;
+      }
+
+      elements.profileSubmit.disabled = true;
+
+      try {
+        await profiles.save(user.uid, { ...parsed.values, email: user.email ?? null });
+        elements.profileForm.removeEventListener("submit", onSubmit);
+        resolve();
+      } catch (error) {
+        elements.profileError.textContent =
+          error?.code === "permission-denied"
+            ? "저장할 권한이 없습니다. 선생님께 Firestore 보안 규칙 배포를 요청해주세요."
+            : (error?.message ?? "저장하지 못했습니다.");
+        elements.profileError.hidden = false;
+      } finally {
+        elements.profileSubmit.disabled = false;
+      }
+    };
+
+    elements.profileForm.addEventListener("submit", onSubmit);
+  });
+}
+
+/* =========================================================
+   로그인 상태
+   ========================================================= */
 let sessionToken = 0;
+
+/** 역할에 맞는 자료를 구독합니다. */
+async function loadData(user, role) {
+  // 상담 기록은 선생님 계정에만 있습니다.
+  if (role === TEACHER) {
+    await startSync(user.uid, {
+      onChange: scheduleRerender,
+      onError: (message) => toast(message, "error"),
+    });
+  }
+
+  await startBoardSync(user.uid, role, {
+    onChange: scheduleRerender,
+    onError: (message) => toast(message, "error"),
+  });
+}
 
 async function handleUserChange(user) {
   const token = ++sessionToken;
@@ -222,19 +308,19 @@ async function handleUserChange(user) {
   if (!user) {
     signedIn = false;
     currentId = null;
+    currentRole = null;
     stopSync();
+    stopBoardSync();
     closeModal();
     showScreen("auth");
     return;
   }
 
-  showScreen("boot", "상담 기록을 불러오는 중…");
+  const role = roleOf(user);
+  showScreen("boot", role === TEACHER ? "상담 기록을 불러오는 중…" : "공지와 과제를 불러오는 중…");
 
   try {
-    await startSync(user.uid, {
-      onChange: scheduleRerender,
-      onError: (message) => toast(message, "error"),
-    });
+    await loadData(user, role);
   } catch (error) {
     if (token !== sessionToken) return;
     showAuthError(
@@ -250,11 +336,21 @@ async function handleUserChange(user) {
   // 로딩 중에 로그아웃했다면 이 결과는 버립니다.
   if (token !== sessionToken) return;
 
+  // 학생은 자기가 몇 학년 몇 반인지 알려줘야 공지와 과제를 받아 볼 수 있습니다.
+  if (role !== TEACHER && !profiles.mine()) {
+    await askProfile(user);
+    if (token !== sessionToken) return;
+  }
+
+  currentRole = role;
+  useViews(role);
+  renderNav();
+
   signedIn = true;
   fillUserBox(user);
   showAuthError("");
   showScreen("app");
-  navigate(window.location.hash.slice(1) || "dashboard", { updateHash: false });
+  navigate(window.location.hash.slice(1) || views[0].meta.id, { updateHash: false });
 }
 
 /* =========================================================

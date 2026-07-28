@@ -56,6 +56,24 @@
     </div>
   </div>
 
+  <!-- 학생이 처음 로그인했을 때 -->
+  <div class="auth" id="profileScreen" hidden>
+    <div class="auth__card auth__card--wide">
+      <div class="auth__logo" aria-hidden="true">🎒</div>
+      <h1 class="auth__title">학생 정보 등록</h1>
+      <p class="auth__desc">
+        처음 오셨네요. 학년·반·번호와 이름을 알려주세요.<br />
+        선생님이 올린 공지와 과제를 받아볼 수 있게 됩니다.
+      </p>
+      <form class="profile-form" id="profileForm" novalidate>
+        <div id="profileFields"></div>
+        <p class="auth__error" id="profileError" hidden></p>
+        <button class="btn btn--primary btn--block" type="submit" id="profileSubmit">시작하기</button>
+      </form>
+      <p class="auth__note">나중에 ‘내 정보 수정’ 에서 언제든 고칠 수 있습니다.</p>
+    </div>
+  </div>
+
   <!-- 본 애플리케이션 -->
   <div class="app" id="app" hidden>
     <!-- 사이드바 -->
