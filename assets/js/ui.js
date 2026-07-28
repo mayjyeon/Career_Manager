@@ -44,18 +44,32 @@ export function initials(name) {
 /** 상담 분류에 따라 배지 색을 정합니다. */
 export function categoryClass(category) {
   switch (category) {
-    case "학업상담":
+    case "진학":
       return "badge--success";
-    case "고민상담":
-      return "badge--warning";
-    case "학교생활":
+    case "기타":
       return "badge--muted";
     default:
       return "";
   }
 }
 
-export const CATEGORIES = ["진로상담", "학업상담", "고민상담", "학교생활", "기타"];
+/** 상담 분류 — 진로상담총괄표 서식과 같은 3종입니다. */
+export const CATEGORIES = ["진로", "진학", "기타"];
+
+/** 파일을 내려받습니다. */
+export function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  // 브라우저가 내려받기를 시작할 시간을 준 뒤 정리합니다.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
 
 /** 빈 상태 블록 HTML. */
 export function emptyState({ icon, title, desc = "", action = "" }) {
@@ -96,8 +110,8 @@ let closeCurrentModal = null;
  * @param {string} [options.subtitle] 부제목
  * @param {string} options.body       본문 HTML
  * @param {Array}  options.actions    [{ label, variant, value }]
- * @param {(value:string, form:HTMLFormElement) => boolean|void} [options.onAction]
- *        false 를 돌려주면 모달을 닫지 않습니다.
+ * @param {(value:string, form:HTMLFormElement) => boolean|void|Promise<boolean|void>} [options.onAction]
+ *        false 를 돌려주면 모달을 닫지 않습니다. 비동기 함수면 끝날 때까지 기다립니다.
  */
 export function openModal({ title, subtitle = "", body, actions, onAction }) {
   closeModal();
@@ -149,9 +163,27 @@ export function openModal({ title, subtitle = "", body, actions, onAction }) {
     if (event.target === root) closeModal();
   });
 
-  const dispatch = (value) => {
-    const keepOpen = onAction ? onAction(value, form) === false : false;
-    if (!keepOpen) closeModal();
+  // 처리가 끝나기 전에 같은 버튼을 두 번 누르지 못하게 막습니다.
+  let pending = false;
+
+  const dispatch = async (value) => {
+    if (pending) return;
+
+    if (!onAction) {
+      closeModal();
+      return;
+    }
+
+    const buttons = form.querySelectorAll(".modal__foot .btn");
+    pending = true;
+    buttons.forEach((button) => (button.disabled = true));
+
+    try {
+      if ((await onAction(value, form)) !== false) closeModal();
+    } finally {
+      pending = false;
+      buttons.forEach((button) => (button.disabled = false));
+    }
   };
 
   form.addEventListener("submit", (event) => {

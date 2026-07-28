@@ -1,5 +1,6 @@
-/** 상담일지 — 학생별 상담 기록 조회 및 추가. */
+/** 상담일지 — 학생별 상담 기록 조회 및 추가, 진로상담총괄표 내보내기. */
 import { studentService, counselingService } from "../services.js";
+import { buildCounselingSummary, toFormEntries } from "../counseling-form.js";
 import {
   esc,
   formatDate,
@@ -9,6 +10,7 @@ import {
   openModal,
   showFormError,
   clearFormError,
+  downloadBlob,
   toast,
 } from "../ui.js";
 
@@ -16,6 +18,9 @@ export const meta = { id: "counseling", icon: "📝", title: "상담일지" };
 
 // 화면을 다시 열어도 선택한 학생을 기억합니다.
 let selectedId = null;
+
+/** 상담 한 회기의 기본 소요시간(분). */
+const DEFAULT_DURATION = 30;
 
 function sessionCard(session) {
   const meta = [
@@ -29,6 +34,11 @@ function sessionCard(session) {
         <span class="session__date">${esc(formatDate(session.sessionDate))}</span>
         ${session.sessionNo ? `<span class="session__no">${session.sessionNo}회기</span>` : ""}
         <span class="badge ${categoryClass(session.category)}">${esc(session.category)}</span>
+        ${
+          session.durationMinutes
+            ? `<span class="badge badge--muted">${session.durationMinutes}분</span>`
+            : ""
+        }
       </div>
       <p class="session__content">${esc(session.content)}</p>
       ${
@@ -48,7 +58,7 @@ function sessionCard(session) {
 
 function sessionFormBody(nextNo) {
   return `
-    <div class="form-grid">
+    <div class="form-grid form-grid--3">
       <div class="field">
         <label class="field__label" for="s-date">상담 날짜</label>
         <input class="input" id="s-date" name="sessionDate" type="date"
@@ -59,6 +69,11 @@ function sessionFormBody(nextNo) {
         <select class="select" id="s-category" name="category">
           ${CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}
         </select>
+      </div>
+      <div class="field">
+        <label class="field__label" for="s-duration">소요시간(분)</label>
+        <input class="input" id="s-duration" name="duration" inputmode="numeric"
+               value="${DEFAULT_DURATION}" />
       </div>
     </div>
     <div class="field">
@@ -103,6 +118,14 @@ function openSessionForm(student, onSaved) {
         return false;
       }
 
+      const rawDuration = get("duration");
+      const duration = rawDuration ? Number.parseInt(rawDuration, 10) : null;
+
+      if (rawDuration && (Number.isNaN(duration) || duration <= 0)) {
+        showFormError(form, "소요시간을 분 단위 숫자로 입력해주세요.");
+        return false;
+      }
+
       const raw = get("sessionDate");
       const date = raw ? new Date(`${raw}T00:00:00`) : new Date();
 
@@ -112,11 +135,185 @@ function openSessionForm(student, onSaved) {
         get("category"),
         content,
         get("followUp") || null,
-        get("nextPlan") || null
+        get("nextPlan") || null,
+        duration
       );
 
       toast(`${no}회기 상담 기록을 저장했습니다.`, "success");
       onSaved();
+      return true;
+    },
+  });
+}
+
+/* =========================================================
+   진로상담총괄표 내보내기
+   ========================================================= */
+const SETTINGS_KEY = "career-manager.summary-form";
+
+const DEFAULT_SETTINGS = {
+  school: "대전반석고등학교",
+  department: "진로진학부",
+  weeks: 17,
+  classHours: 10,
+};
+
+/** 지난번에 입력한 학교·시수 정보를 기억합니다. */
+function loadSettings() {
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(settings) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    /* 저장할 수 없으면 이번 세션에만 적용됩니다. */
+  }
+}
+
+/** 오늘 날짜를 기준으로 학년도·학기와 기간을 정합니다. */
+function currentTerm(today = new Date()) {
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+
+  // 1학기 3~8월, 2학기 9월~다음 해 2월. 1·2월은 지난 학년도의 2학기입니다.
+  if (month >= 3 && month <= 8) {
+    return { year, term: 1, from: `${year}-03-01`, to: `${year}-08-31` };
+  }
+  if (month >= 9) {
+    return { year, term: 2, from: `${year}-09-01`, to: `${year + 1}-02-28` };
+  }
+  return { year: year - 1, term: 2, from: `${year - 1}-09-01`, to: `${year}-02-28` };
+}
+
+function exportFormBody() {
+  const term = currentTerm();
+  const settings = loadSettings();
+
+  return `
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="e-from">시작일</label>
+        <input class="input" id="e-from" name="from" type="date" value="${term.from}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="e-to">종료일</label>
+        <input class="input" id="e-to" name="to" type="date" value="${term.to}" />
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="e-year">학년도</label>
+        <input class="input" id="e-year" name="year" inputmode="numeric" value="${term.year}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="e-term">학기</label>
+        <select class="select" id="e-term" name="term">
+          <option value="1" ${term.term === 1 ? "selected" : ""}>1학기</option>
+          <option value="2" ${term.term === 2 ? "selected" : ""}>2학기</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="e-school">학교명</label>
+        <input class="input" id="e-school" name="school" value="${esc(settings.school)}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="e-dept">부서명</label>
+        <input class="input" id="e-dept" name="department" value="${esc(settings.department)}" />
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="e-weeks">학기 적용 주 수 (B)</label>
+        <input class="input" id="e-weeks" name="weeks" inputmode="numeric" value="${settings.weeks}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="e-hours">주당 수업시수 (D)</label>
+        <input class="input" id="e-hours" name="classHours" inputmode="decimal"
+               value="${settings.classHours}" />
+      </div>
+    </div>
+    <p class="caption" style="margin-top:4px">
+      한글 문서(.hwpx)로 저장됩니다. 한글에서 열어 ‘다른 이름으로 저장’하면 .hwp 로 바꿀 수 있습니다.
+    </p>`;
+}
+
+function openExportForm() {
+  openModal({
+    title: "진로상담총괄표 내보내기",
+    subtitle: "기간 안의 상담 기록을 서식에 채워 한글 문서로 저장합니다.",
+    body: exportFormBody(),
+    actions: [
+      { label: "취소", variant: "secondary", value: "cancel" },
+      { label: "내보내기", variant: "primary", value: "submit" },
+    ],
+    onAction: async (action, form) => {
+      if (action !== "submit") return;
+
+      clearFormError(form);
+      const get = (name) => form.elements[name].value.trim();
+
+      const from = get("from");
+      const to = get("to");
+
+      if (!from || !to) {
+        showFormError(form, "시작일과 종료일을 입력해주세요.");
+        return false;
+      }
+      if (from > to) {
+        showFormError(form, "종료일이 시작일보다 빠릅니다.");
+        return false;
+      }
+
+      const year = Number.parseInt(get("year"), 10);
+      const weeks = Number.parseInt(get("weeks"), 10);
+      const classHours = Number.parseFloat(get("classHours"));
+
+      if (Number.isNaN(year)) {
+        showFormError(form, "학년도를 숫자로 입력해주세요.");
+        return false;
+      }
+      if (Number.isNaN(weeks) || weeks <= 0) {
+        showFormError(form, "학기 적용 주 수를 1 이상의 숫자로 입력해주세요.");
+        return false;
+      }
+      if (Number.isNaN(classHours) || classHours < 0) {
+        showFormError(form, "주당 수업시수를 숫자로 입력해주세요.");
+        return false;
+      }
+
+      const sessions = counselingService.getInRange(from, to);
+
+      if (sessions.length === 0) {
+        showFormError(form, "그 기간에는 상담 기록이 없습니다.");
+        return false;
+      }
+
+      const settings = { school: get("school"), department: get("department"), weeks, classHours };
+      saveSettings(settings);
+
+      const term = Number.parseInt(get("term"), 10);
+
+      try {
+        const blob = await buildCounselingSummary({
+          ...settings,
+          year,
+          term,
+          entries: toFormEntries(sessions),
+        });
+
+        downloadBlob(blob, `진로상담총괄표_${year}학년도_${term}학기.hwpx`);
+        toast(`상담 ${sessions.length}건을 내보냈습니다.`, "success");
+      } catch (error) {
+        toast(error?.message ?? "문서를 만들지 못했습니다.", "error");
+      }
+
       return true;
     },
   });
@@ -162,6 +359,9 @@ export function render(container, { navigate }) {
       <div>
         <h1 class="page-title">상담일지</h1>
         <p class="page-subtitle">학생별 상담 기록을 남기고 확인합니다.</p>
+      </div>
+      <div class="page-head__actions">
+        <button class="btn btn--secondary" data-export>📄 총괄표 내보내기</button>
       </div>
     </div>
 
@@ -214,6 +414,8 @@ export function render(container, { navigate }) {
     selectedId = event.target.value || null;
     rerender();
   });
+
+  container.querySelector("[data-export]")?.addEventListener("click", () => openExportForm());
 
   container.querySelectorAll("[data-add]").forEach((btn) =>
     btn.addEventListener("click", () => {

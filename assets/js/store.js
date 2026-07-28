@@ -3,9 +3,9 @@
  * 원본 C# 프로젝트의 EF Core + SQLite(AppDbContext)를 대체합니다.
  *
  * 데이터는 로그인한 사용자별로 분리해 저장합니다.
- *   users/{uid}/students/{id}      { name, memo, isActive, createdAt, updatedAt }
+ *   users/{uid}/students/{id}      { name, gender, memo, isActive, createdAt, updatedAt }
  *   users/{uid}/schoolYears/{id}   { studentId, schoolYear, grade, classNo, studentNo, status }
- *   users/{uid}/sessions/{id}      { studentId, sessionDate, sessionNo, category,
+ *   users/{uid}/sessions/{id}      { studentId, sessionDate, sessionNo, category, durationMinutes,
  *                                    content, followUpAction, nextPlan, createdAt, updatedAt }
  *
  * 화면 코드가 데이터를 동기적으로 읽을 수 있도록 onSnapshot 으로 받은 내용을
@@ -18,6 +18,7 @@ import {
   onSnapshot,
   setDoc,
   updateDoc,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { firebaseContext } from "./firebase.js";
 
@@ -148,6 +149,42 @@ function patch(name, id, fields) {
   send(updateDoc(doc(collectionRef(name), id), fields));
 }
 
+/** 저장하기 전에 문서 번호를 미리 받아 둡니다(학생과 소속을 잇기 위해). */
+export function newId(name) {
+  return doc(collectionRef(name)).id;
+}
+
+/**
+ * 여러 건을 한 번에 저장합니다(명렬표 업로드용).
+ *
+ * 한 건씩 보내면 학생 수만큼 요청이 생기므로 일괄 쓰기로 묶습니다.
+ * Firestore 의 일괄 쓰기는 한 번에 500개까지라 나누어 보냅니다.
+ *
+ * @param {Array<{ collection: string, id: string, fields: object, mode?: "set"|"update" }>} operations
+ * @returns {Promise<void>}
+ */
+export async function commitAll(operations) {
+  const LIMIT = 450;
+
+  for (let i = 0; i < operations.length; i += LIMIT) {
+    const chunk = operations.slice(i, i + LIMIT);
+    const batch = writeBatch(firebaseContext().db);
+
+    for (const operation of chunk) {
+      const ref = doc(collectionRef(operation.collection), operation.id);
+
+      // 화면에 곧바로 보이도록 로컬 캐시를 먼저 갱신합니다.
+      applyLocal(operation.collection, { id: operation.id, ...operation.fields });
+
+      if (operation.mode === "update") batch.update(ref, operation.fields);
+      else batch.set(ref, operation.fields);
+    }
+
+    notifyChange();
+    await batch.commit();
+  }
+}
+
 /* =========================================================
    컬렉션
    ========================================================= */
@@ -158,15 +195,20 @@ export const students = {
   find(id) {
     return cache.students.find((s) => s.id === id) || null;
   },
-  add({ name, memo = null }) {
+  add({ name, gender = null, memo = null }) {
+    return insert("students", students.fields({ name, gender, memo }));
+  },
+  /** 새 학생 문서에 들어갈 값. 일괄 저장에서도 같은 값을 씁니다. */
+  fields({ name, gender = null, memo = null }) {
     const now = new Date().toISOString();
-    return insert("students", {
+    return {
       name,
+      gender,
       memo,
       isActive: true,
       createdAt: now,
       updatedAt: now,
-    });
+    };
   },
   update(id, fields) {
     patch("students", id, { ...fields, updatedAt: new Date().toISOString() });
@@ -181,14 +223,19 @@ export const schoolYears = {
     return cache.schoolYears.filter((y) => y.studentId === studentId);
   },
   add({ studentId, schoolYear, grade, classNo, studentNo, status = "재학" }) {
-    return insert("schoolYears", {
-      studentId,
-      schoolYear,
-      grade,
-      classNo,
-      studentNo,
-      status,
-    });
+    return insert("schoolYears", { studentId, schoolYear, grade, classNo, studentNo, status });
+  },
+  /** 같은 학년도/학년/반/번호 자리에 이미 있는 소속을 찾습니다. */
+  findSeat({ schoolYear, grade, classNo, studentNo }) {
+    return (
+      cache.schoolYears.find(
+        (row) =>
+          row.schoolYear === schoolYear &&
+          row.grade === grade &&
+          row.classNo === classNo &&
+          row.studentNo === studentNo
+      ) || null
+    );
   },
   update(id, fields) {
     patch("schoolYears", id, fields);
@@ -207,6 +254,7 @@ export const sessions = {
     sessionDate,
     sessionNo,
     category,
+    durationMinutes = null,
     content,
     followUpAction = null,
     nextPlan = null,
@@ -217,6 +265,7 @@ export const sessions = {
       sessionDate,
       sessionNo,
       category,
+      durationMinutes,
       content,
       followUpAction,
       nextPlan,
