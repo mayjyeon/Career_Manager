@@ -2,16 +2,9 @@
  * 진로상담총괄표(별지) 만들기.
  *
  * 학교에서 쓰는 결재 서식을 그대로 옮긴 것으로,
- * 표의 칸 너비·높이는 원본 한글 파일에서 읽은 값을 그대로 씁니다.
+ * 칸 너비·높이·글자 크기·배경색은 원본 한글 파일에서 읽은 값을 씁니다.
  */
-import {
-  ALIGN,
-  CHAR,
-  PAGE_B4,
-  buildHwpx,
-  paragraph,
-  table,
-} from "./hwpx.js";
+import { ALIGN, PAGE_B4, buildHwpx, font, paragraph, table } from "./hwpx.js";
 
 /** 원본 서식의 열 너비 (HWPUNIT) */
 const COLUMNS = [2434, 10968, 4561, 3585, 5317, 2451, 2451, 2418, 21223];
@@ -19,8 +12,12 @@ const COLUMNS = [2434, 10968, 4561, 3585, 5317, 2451, 2451, 2418, 21223];
 /** 원본 서식의 줄 높이 */
 const ROW = { headTop: 2001, headBottom: 2552, data: 1282, total: 1903 };
 
-/** 최소 줄 수 — 상담이 적어도 서식 모양을 유지합니다. */
-const MIN_ROWS = 32;
+/** 머리글 배경색 — 원본과 같은 연한 파랑입니다. */
+const HEAD_FILL = "#DFE6F7";
+
+/** 번호가 매겨진 줄 수와, 그 뒤에 두는 여분의 빈 줄 수. */
+const NUMBERED_ROWS = 32;
+const SPARE_ROWS = 9;
 
 /**
  * 수업 시수 기준. 이 서식은 50분을 한 시간(차시)으로 셉니다.
@@ -32,6 +29,19 @@ const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 /** 서식의 상담 구분 3종. */
 export const FORM_CATEGORIES = ["진로", "진학", "기타"];
+
+/** 원본 서식에서 쓰는 글자 모양. */
+const F = {
+  title: font(22, { bold: true }), // 진로상담총괄표
+  titleSub: font(18, { bold: true }), // 년 학기
+  titleHours: font(16, { bold: true }), // 총시간 : 시간
+  school: font(13), // 학교명 · 부서명
+  head: font(10, { bold: true }), // 표 머리글
+  body: font(10), // 표 본문
+  summary: font(12, { bold: true }), // 하단 누계표
+  summaryRed: font(12, { bold: true, color: "#FF0000" }),
+  note: font(10), // ※ 안내 문구
+};
 
 /* =========================================================
    값 다듬기
@@ -50,7 +60,6 @@ function formatSessionDate(value) {
   return `${date.getMonth() + 1}월 ${date.getDate()}일(${WEEKDAYS[date.getDay()]})`;
 }
 
-/** 분을 시수로 바꿉니다. */
 const toHours = (minutes) => minutes / MINUTES_PER_HOUR;
 
 /** 소수점이 필요할 때만 붙입니다. */
@@ -61,11 +70,10 @@ function trimNumber(value) {
 
 /** 표에 넣을 상담 내용 — 줄바꿈을 없애 한 줄로 만듭니다. */
 function summarize(session) {
-  const parts = [session.content, session.followUpAction, session.nextPlan]
+  return [session.content, session.followUpAction, session.nextPlan]
     .map((part) => (part ?? "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  return parts.join(" / ");
+    .filter(Boolean)
+    .join(" / ");
 }
 
 /* =========================================================
@@ -74,15 +82,17 @@ function summarize(session) {
 const head = (text, options = {}) => ({
   text,
   align: ALIGN.center,
-  char: CHAR.smallBold,
+  char: F.head,
   header: true,
   ...options,
 });
 
+/** 머리글 두 줄. 아래쪽 테두리는 원본처럼 두 줄로 그립니다. */
 function headerRows() {
   return [
     {
       height: ROW.headTop,
+      fill: HEAD_FILL,
       cells: [
         head("연번", { rowSpan: 2 }),
         head("상담일자", { rowSpan: 2 }),
@@ -95,16 +105,16 @@ function headerRows() {
     },
     {
       height: ROW.headBottom,
-      cells: [
-        ...FORM_CATEGORIES.map((name) => head(name)),
-        head("진로, 진학, 기타 상담내용 간략히 기록", { char: CHAR.small }),
-      ],
+      fill: HEAD_FILL,
+      doubleBottom: true,
+      cells: [...FORM_CATEGORIES.map((name) => head(name)), head("진로, 진학, 기타 상담내용 간략히 기록")],
     },
   ];
 }
 
+/** 번호가 붙은 상담 줄. entry 가 없으면 번호만 있는 빈 줄입니다. */
 function dataRow(index, entry) {
-  const cell = (text, align = ALIGN.center, char = CHAR.small) => ({ text, align, char });
+  const cell = (text, align = ALIGN.center) => ({ text, align, char: F.body });
 
   if (!entry) {
     return {
@@ -112,8 +122,6 @@ function dataRow(index, entry) {
       cells: [cell(String(index + 1)), ...Array.from({ length: 8 }, () => cell(""))],
     };
   }
-
-  const marks = FORM_CATEGORIES.map((name) => cell(entry.category === name ? "○" : ""));
 
   return {
     height: ROW.data,
@@ -123,26 +131,33 @@ function dataRow(index, entry) {
       cell(entry.minutes ? String(entry.minutes) : ""),
       cell(entry.studentId),
       cell(entry.name),
-      ...marks,
+      ...FORM_CATEGORIES.map((name) => cell(entry.category === name ? "○" : "")),
       cell(entry.summary, ALIGN.left),
     ],
   };
 }
 
+/** 번호 없이 비워 두는 여분의 줄. */
+function spareRow() {
+  return {
+    height: ROW.data,
+    cells: Array.from({ length: 9 }, () => ({ text: "", align: ALIGN.center, char: F.body })),
+  };
+}
+
+/**
+ * 마지막 '계' 줄.
+ * 원본처럼 상담시간만 합계를 넣고, 나머지 칸은 사선으로 지웁니다.
+ */
 function totalRow(entries) {
-  const cell = (text, char = CHAR.smallBold) => ({ text, align: ALIGN.center, char });
   const minutes = entries.reduce((sum, entry) => sum + (entry.minutes ?? 0), 0);
-  const count = (name) => entries.filter((entry) => entry.category === name).length;
 
   return {
     height: ROW.total,
     cells: [
-      { text: "계", align: ALIGN.center, char: CHAR.smallBold, colSpan: 2 },
-      cell(minutes ? String(minutes) : ""),
-      cell(""),
-      cell(`${entries.length}명`),
-      ...FORM_CATEGORIES.map((name) => cell(count(name) ? String(count(name)) : "")),
-      cell(""),
+      { text: "계", align: ALIGN.center, char: F.body, colSpan: 2 },
+      { text: minutes ? String(minutes) : "", align: ALIGN.center, char: F.body },
+      ...Array.from({ length: 6 }, () => ({ text: "", slash: true })),
     ],
   };
 }
@@ -176,8 +191,13 @@ export function buildCounselingSummary({
   const totalHours = toHours(totalMinutes);
   const average = weeks > 0 ? totalHours / weeks : 0;
 
-  const rowCount = Math.max(entries.length, MIN_ROWS);
-  const dataRows = Array.from({ length: rowCount }, (_, index) => dataRow(index, entries[index]));
+  const numbered = Math.max(entries.length, NUMBERED_ROWS);
+  const rows = [
+    ...headerRows(),
+    ...Array.from({ length: numbered }, (_, index) => dataRow(index, entries[index])),
+    ...Array.from({ length: SPARE_ROWS }, spareRow),
+    totalRow(entries),
+  ];
 
   const titleTable = table({
     widths: [16737, 38152],
@@ -185,23 +205,24 @@ export function buildCounselingSummary({
       {
         height: 5167,
         cells: [
-          { text: `${school}\n${department}`, align: ALIGN.center, char: CHAR.bold },
+          { text: `${school}\n${department}`, align: ALIGN.center, char: F.school },
           {
-            text: `진로상담총괄표  ${year}년 ${term} 학기\n총시간 : ${trimNumber(totalHours)}시간`,
+            // 첫 줄은 한 줄 안에서 글자 크기가 바뀝니다.
+            text: [
+              [
+                { text: "진로상담총괄표", char: F.title },
+                { text: `  ${year}년 ${term} 학기`, char: F.titleSub },
+              ],
+              [{ text: `총시간 : ${trimNumber(totalHours)}시간`, char: F.titleHours }],
+            ],
             align: ALIGN.center,
-            char: CHAR.bold,
           },
         ],
       },
     ],
   });
 
-  const mainTable = table({
-    widths: COLUMNS,
-    rows: [...headerRows(), ...dataRows, totalRow(entries)],
-  });
-
-  const summaryCell = (text) => ({ text, align: ALIGN.left, char: CHAR.small });
+  const summaryCell = (text, char = F.summary) => ({ text, align: ALIGN.left, char });
 
   const summaryTable = table({
     widths: [28623, 19284],
@@ -218,9 +239,7 @@ export function buildCounselingSummary({
         cells: [
           summaryCell("주당 진로상담 평균시수(A/B) = (C)"),
           summaryCell(
-            weeks > 0
-              ? `${trimNumber(totalHours)}시간÷${weeks}주 = ${trimNumber(average)}시간`
-              : ""
+            weeks > 0 ? `${trimNumber(totalHours)}시간÷${weeks}주 = ${trimNumber(average)}시간` : ""
           ),
         ],
       },
@@ -233,11 +252,13 @@ export function buildCounselingSummary({
               ? `${trimNumber(classHours)}시간+${trimNumber(average)}시간 = ${trimNumber(
                   classHours + average
                 )}시간`
-              : ""
+              : "",
+            F.summaryRed
           ),
         ],
       },
     ],
+    lines: { outer: 0.12, inner: 0.12 },
   });
 
   const notes = [
@@ -252,13 +273,13 @@ export function buildCounselingSummary({
     title: `진로상담총괄표 ${year}년 ${term}학기`,
     page: PAGE_B4,
     blocks: [
-      paragraph("［별지］ 진로상담총괄표 결재 양식", { align: ALIGN.left, char: CHAR.body }),
+      paragraph("［별지］ 진로상담총괄표 결재 양식", { align: ALIGN.left }),
       titleTable,
       paragraph(""),
-      mainTable,
+      table({ widths: COLUMNS, rows }),
       paragraph(""),
       summaryTable,
-      ...notes.map((note) => paragraph(note, { align: ALIGN.left, char: CHAR.small })),
+      ...notes.map((note) => paragraph(note, { align: ALIGN.left, char: F.note })),
     ],
   });
 }
