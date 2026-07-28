@@ -14,6 +14,7 @@
  */
 import {
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   setDoc,
@@ -143,6 +144,56 @@ function insert(name, fields) {
   return row;
 }
 
+/* =========================================================
+   휴지통
+   ========================================================= */
+/**
+ * 지운 자료는 바로 없애지 않고 deletedAt 을 적어 감춥니다.
+ * 목록에서는 빠지지만 휴지통에서 되살릴 수 있습니다.
+ */
+const live = (name) => cache[name].filter((row) => !row.deletedAt);
+const deleted = (name) => cache[name].filter((row) => row.deletedAt);
+
+/** 휴지통으로 보냅니다. */
+export function softDelete(name, ids) {
+  const now = new Date().toISOString();
+  const list = Array.isArray(ids) ? ids : [ids];
+
+  return commitAll(
+    list.map((id) => ({ collection: name, id, mode: "update", fields: { deletedAt: now } }))
+  );
+}
+
+/** 휴지통에서 되살립니다. */
+export function restore(name, ids) {
+  const list = Array.isArray(ids) ? ids : [ids];
+
+  return commitAll(
+    list.map((id) => ({ collection: name, id, mode: "update", fields: { deletedAt: null } }))
+  );
+}
+
+/** 완전히 지웁니다. 되돌릴 수 없습니다. */
+export async function purge(name, ids) {
+  const list = Array.isArray(ids) ? ids : [ids];
+
+  for (const id of list) {
+    const rows = cache[name];
+    const index = rows.findIndex((row) => row.id === id);
+    if (index >= 0) rows.splice(index, 1);
+    await deleteDoc(doc(collectionRef(name), id));
+  }
+
+  notifyChange();
+}
+
+/** 휴지통에 있는 자료. */
+export const trash = {
+  students: () => deleted("students"),
+  schoolYears: () => deleted("schoolYears"),
+  sessions: () => deleted("sessions"),
+};
+
 function patch(name, id, fields) {
   applyLocal(name, { id, ...fields });
   notifyChange();
@@ -190,10 +241,10 @@ export async function commitAll(operations) {
    ========================================================= */
 export const students = {
   all() {
-    return cache.students;
+    return live("students");
   },
   find(id) {
-    return cache.students.find((s) => s.id === id) || null;
+    return live("students").find((s) => s.id === id) || null;
   },
   add({ name, gender = null, memo = null }) {
     return insert("students", students.fields({ name, gender, memo }));
@@ -217,10 +268,10 @@ export const students = {
 
 export const schoolYears = {
   all() {
-    return cache.schoolYears;
+    return live("schoolYears");
   },
   forStudent(studentId) {
-    return cache.schoolYears.filter((y) => y.studentId === studentId);
+    return live("schoolYears").filter((y) => y.studentId === studentId);
   },
   add({ studentId, schoolYear, grade, classNo, studentNo, status = "재학" }) {
     return insert("schoolYears", { studentId, schoolYear, grade, classNo, studentNo, status });
@@ -228,7 +279,7 @@ export const schoolYears = {
   /** 같은 학년도/학년/반/번호 자리에 이미 있는 소속을 찾습니다. */
   findSeat({ schoolYear, grade, classNo, studentNo }) {
     return (
-      cache.schoolYears.find(
+      live("schoolYears").find(
         (row) =>
           row.schoolYear === schoolYear &&
           row.grade === grade &&
@@ -244,10 +295,16 @@ export const schoolYears = {
 
 export const sessions = {
   all() {
-    return cache.sessions;
+    return live("sessions");
+  },
+  find(id) {
+    return live("sessions").find((x) => x.id === id) || null;
   },
   forStudent(studentId) {
-    return cache.sessions.filter((x) => x.studentId === studentId);
+    return live("sessions").filter((x) => x.studentId === studentId);
+  },
+  update(id, fields) {
+    patch("sessions", id, { ...fields, updatedAt: new Date().toISOString() });
   },
   add({
     studentId,

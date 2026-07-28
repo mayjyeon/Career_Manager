@@ -27,6 +27,16 @@
   --warning: #d9903a;
   --warning-soft: #fdf2e3;
 
+  /*
+   * 그래프 계열 색. 순서를 바꾸면 안 됩니다.
+   * 이 세 색은 색약(적록·청황)에서도 서로 구분되는지 확인한 조합입니다.
+   */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --chart-grid: #e8ebf0;
+  --chart-axis: #d9dee7;
+
   --hover: #f0f2f5;
 
   --shadow-sm: 0 1px 2px rgba(24, 33, 51, 0.05);
@@ -64,6 +74,13 @@
   --success-soft: #1a2f26;
   --warning: #e0a955;
   --warning-soft: #332916;
+
+  /* 같은 세 가지 색을 어두운 바탕에 맞춰 다시 고른 값입니다. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --chart-grid: #272e3b;
+  --chart-axis: #333c4c;
 
   --hover: #232a36;
 
@@ -543,6 +560,199 @@ button { cursor: pointer; }
 .btn--block { width: 100%; justify-content: center; margin-top: 6px; }
 
 /* =========================================================
+   그래프
+   ========================================================= */
+/* 세로 막대 — 축 이름이 늘어나지 않도록 HTML 로 그립니다. */
+.columns {
+  display: flex;
+  align-items: flex-end;
+  /* 막대 사이는 테두리 대신 바탕색 틈으로 나눕니다. */
+  gap: 2px;
+}
+
+.col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.col__value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  height: 14px;
+  white-space: nowrap;
+}
+
+.col__track {
+  width: 100%;
+  height: 110px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.col__fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: var(--series-1);
+}
+.col__fill.is-empty { background: var(--border); opacity: 0.6; }
+
+.col__label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* 꺾은선 — 선만 SVG 로 그리고 글자는 바깥에 둡니다. */
+.plot { position: relative; }
+.plot__max {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.plot__ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.chart { display: block; width: 100%; height: 130px; }
+
+.chart__grid { stroke: var(--chart-grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+.chart__line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.chart__dot { stroke: var(--surface); stroke-width: 1; vector-effect: non-scaling-stroke; }
+
+.chart-empty {
+  margin: 0;
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+/* 범례 */
+.legend {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.legend__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.legend__item b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.legend__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+/* 비율 막대 */
+.share-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  /* 조각 사이는 테두리 대신 바탕색 틈으로 나눕니다. */
+  gap: 2px;
+  background: var(--surface);
+}
+.share-bar__part { display: block; }
+
+/* 가로 막대 목록 */
+.bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) 1fr minmax(46px, auto);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.bar-row__label { color: var(--text-muted); white-space: nowrap; }
+.bar-row__track { background: var(--surface-alt); border-radius: 4px; height: 10px; }
+.bar-row__fill { display: block; height: 100%; border-radius: 4px; background: var(--series-1); }
+.bar-row__value { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* 표로 보기 */
+.chart-table { margin-top: 14px; }
+.chart-table > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+.chart-table > summary:hover { color: var(--accent); }
+.chart-table .table-wrap { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; }
+
+/* =========================================================
+   선택 · 임시 저장
+   ========================================================= */
+.table .check { width: 40px; text-align: center; }
+.table .check input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+
+/* 여러 명을 고른 뒤 나타나는 줄 */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: 13.5px;
+}
+
+/* 쓰다 만 내용이 있을 때 모달 위쪽에 뜨는 안내 */
+.draft-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: 10px;
+  background: var(--warning-soft);
+  font-size: 13px;
+}
+
+/* 눈에 덜 띄어야 하는 카드(회원 탈퇴 등) */
+.card--quiet { background: var(--surface-alt); box-shadow: none; }
+
+/* =========================================================
    버튼
    ========================================================= */
 .btn {
@@ -797,6 +1007,17 @@ button { cursor: pointer; }
   gap: 5px;
 }
 .session__meta-row { font-size: 13px; color: var(--text-muted); }
+
+/* 회기별 수정·삭제 — 평소에는 흐리게 두고 카드에 마우스를 올리면 또렷해집니다. */
+.session__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+.session:hover .session__actions,
+.session__actions:focus-within { opacity: 1; }
 .session__meta-row b { color: var(--text); font-weight: 600; margin-right: 6px; }
 
 /* 최근 상담(대시보드) */
@@ -865,6 +1086,8 @@ button { cursor: pointer; }
 .modal {
   width: min(560px, 100%);
   max-height: calc(100vh - 40px);
+  /* 모바일 브라우저는 주소창을 뺀 높이를 써야 버튼이 가리지 않습니다. */
+  max-height: calc(100dvh - 40px);
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -874,7 +1097,19 @@ button { cursor: pointer; }
   animation: pop-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 
+/*
+ * 실제로 머리글·본문·버튼을 담는 것은 form 이므로
+ * 여기서도 세로로 늘어나게 해야 본문만 스크롤되고 버튼이 아래에 남습니다.
+ */
+.modal__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+}
+
 .modal__head {
+  flex: 0 0 auto;
   padding: 22px 24px 0;
   display: flex;
   align-items: flex-start;
@@ -898,19 +1133,26 @@ button { cursor: pointer; }
 .modal__close:hover { background: var(--hover); color: var(--text); }
 
 .modal__body {
+  flex: 1 1 auto;
+  /* min-height 를 0 으로 두어야 넘치는 내용이 스크롤됩니다. */
+  min-height: 0;
   padding: 20px 24px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
 .modal__foot {
+  flex: 0 0 auto;
   padding: 16px 24px 22px;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   border-top: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 /* =========================================================

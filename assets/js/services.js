@@ -4,6 +4,7 @@
  * CounselingService.cs 를 그대로 옮긴 것입니다.
  */
 import { students, schoolYears, sessions, commitAll, newId } from "./store.js";
+import { trashSession, trashStudents } from "./trash.js";
 
 /** 가장 최근 학년도의 소속 정보를 돌려줍니다. */
 function latestSchoolYear(studentId) {
@@ -239,12 +240,25 @@ export const studentService = {
     return { ok: true, error: null };
   },
 
-  /** 학생을 비활성화합니다. 상담 기록은 남습니다. */
+  /** 학생을 비활성화합니다. 목록에서 빠지지만 자료는 그대로 남습니다. */
   deactivate(id) {
     const student = students.find(id);
     if (!student) return;
 
     students.update(id, { isActive: false });
+  },
+
+  /**
+   * 학생을 지웁니다(자퇴·졸업 등).
+   * 소속과 상담 기록도 함께 휴지통으로 들어가고, 30일 뒤 완전히 사라집니다.
+   *
+   * @param {string[]} ids
+   */
+  removeStudents(ids) {
+    return trashStudents(ids, (studentId) => ({
+      schoolYears: schoolYears.forStudent(studentId).map((row) => row.id),
+      sessions: sessions.forStudent(studentId).map((row) => row.id),
+    }));
   },
 
   getActiveCount() {
@@ -340,6 +354,28 @@ export const counselingService = {
             : null,
         };
       });
+  },
+
+  /** 상담 기록을 고칩니다. */
+  update(id, { date, category, content, followUp, nextPlan, durationMinutes }) {
+    const session = sessions.find(id);
+    if (!session) return { ok: false, error: "상담 기록을 찾을 수 없습니다." };
+
+    sessions.update(id, {
+      sessionDate: date,
+      category: category && category.trim() ? category.trim() : "진로",
+      durationMinutes,
+      content,
+      followUpAction: followUp,
+      nextPlan,
+    });
+
+    return { ok: true, error: null };
+  },
+
+  /** 상담 기록을 휴지통으로 보냅니다. */
+  remove(id) {
+    return trashSession(id);
   },
 
   getTotalCount() {

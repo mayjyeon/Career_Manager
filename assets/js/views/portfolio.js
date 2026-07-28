@@ -2,6 +2,7 @@
  * 포트폴리오 — 학생이 자유롭게 모아 두고, 선생님은 학생별로 열람합니다.
  */
 import { portfolios, profiles, session } from "../board.js";
+import { attachDraft } from "../drafts.js";
 import { parseLinks } from "../links.js";
 import { TEACHER } from "../roles.js";
 import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
@@ -24,7 +25,9 @@ const expanded = new Set();
    쓰기 (학생)
    ========================================================= */
 function openEntryForm(entry, onSaved) {
-  openModal({
+  let draft = null;
+
+  const form = openModal({
     title: entry ? "포트폴리오 수정" : "포트폴리오 추가",
     subtitle: entry ? "" : "활동 기록, 수상, 독서, 진로 탐색 등 무엇이든 남겨보세요.",
     body: `
@@ -43,21 +46,21 @@ function openEntryForm(entry, onSaved) {
       { label: "취소", variant: "secondary", value: "cancel" },
       { label: "저장", variant: "primary", value: "submit" },
     ],
-    onAction: async (action, form) => {
+    onAction: async (action, formEl) => {
       if (action !== "submit") return;
 
-      clearFormError(form);
-      const get = (name) => form.elements[name].value.trim();
+      clearFormError(formEl);
+      const get = (name) => formEl.elements[name].value.trim();
 
       const title = get("title");
       if (!title) {
-        showFormError(form, "제목을 입력해주세요.");
+        showFormError(formEl, "제목을 입력해주세요.");
         return false;
       }
 
       const links = parseLinks(get("links"));
       if (!links.ok) {
-        showFormError(form, links.error);
+        showFormError(formEl, links.error);
         return false;
       }
 
@@ -80,16 +83,20 @@ function openEntryForm(entry, onSaved) {
         if (entry) await portfolios.update(entry.id, fields);
         else await portfolios.add(fields);
 
+        draft?.done();
         toast(entry ? "포트폴리오를 수정했습니다." : "포트폴리오를 추가했습니다.", "success");
         onSaved();
       } catch (error) {
-        showFormError(form, error?.message ?? "저장하지 못했습니다.");
+        showFormError(formEl, error?.message ?? "저장하지 못했습니다.");
         return false;
       }
 
       return true;
     },
   });
+
+  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
+  draft = attachDraft(form, `portfolio:${entry?.id ?? "new"}`, ["title", "body", "links"]);
 }
 
 /* =========================================================

@@ -1,9 +1,37 @@
 /** 학생 첫 화면 — 내 정보, 새 공지, 낼 과제를 한눈에 봅니다. */
-import { assignments, notices, portfolios, profiles, submissions } from "../board.js";
+import { assignments, notices, portfolios, profiles, submissions, withdraw } from "../board.js";
+import { signOutUser } from "../auth.js";
 import { matchesTargets } from "../roles.js";
 import { renderPostMeta } from "./post-parts.js";
-import { emptyState, esc, relativeDate, toast } from "../ui.js";
+import { confirmDialog, emptyState, esc, relativeDate, toast } from "../ui.js";
 import { openProfileForm } from "./profile-form.js";
+
+/** 졸업 등으로 더 이상 쓰지 않을 때 내 자료를 모두 지웁니다. */
+async function confirmWithdraw() {
+  const counts = {
+    submissions: submissions.all().length,
+    portfolios: portfolios.mine().length,
+  };
+
+  const ok = await confirmDialog({
+    title: "회원 탈퇴",
+    message:
+      "내 정보와 올린 자료를 모두 지우고 로그아웃합니다.\n" +
+      `제출물 ${counts.submissions}건, 포트폴리오 ${counts.portfolios}건이 사라집니다.\n\n` +
+      "휴지통을 거치지 않고 바로 지워지며 되돌릴 수 없습니다.\n" +
+      "구글 계정 자체는 그대로 남고, 다시 로그인하면 새로 시작합니다.",
+    confirmLabel: "탈퇴하기",
+  });
+  if (!ok) return;
+
+  try {
+    await withdraw();
+    toast("탈퇴 처리했습니다. 그동안 수고 많으셨습니다.");
+    await signOutUser();
+  } catch (error) {
+    toast(error?.message ?? "탈퇴하지 못했습니다.", "error");
+  }
+}
 
 export const meta = { id: "home", icon: "🏠", title: "홈" };
 
@@ -116,6 +144,19 @@ export function render(container, { navigate }) {
              </ul>`
           : emptyState({ icon: "📢", title: "공지가 없습니다", desc: "" })
       }
+    </section>
+
+    <section class="card card--quiet" style="margin-top:16px">
+      <div class="card__head">
+        <h2 class="section-title">회원 탈퇴</h2>
+      </div>
+      <p class="caption" style="line-height:1.7">
+        졸업 등으로 더 이상 쓰지 않는다면 내 정보와 올린 자료를 모두 지울 수 있습니다.
+        구글 계정 자체는 그대로 남습니다.
+      </p>
+      <div style="margin-top:12px">
+        <button class="btn btn--danger btn--sm" data-withdraw>회원 탈퇴</button>
+      </div>
     </section>`;
 
   container.querySelectorAll("[data-go]").forEach((button) =>
@@ -128,4 +169,6 @@ export function render(container, { navigate }) {
       rerender();
     })
   );
+
+  container.querySelector("[data-withdraw]")?.addEventListener("click", () => confirmWithdraw());
 }

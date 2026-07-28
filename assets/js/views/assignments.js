@@ -1,5 +1,6 @@
 /** 과제 — 선생님이 내고 학생이 제출합니다. */
 import { assignments, profiles, session, submissions } from "../board.js";
+import { attachDraft } from "../drafts.js";
 import { parseLinks } from "../links.js";
 import { TEACHER, describeTargets, formatTargets, matchesTargets, parseTargets } from "../roles.js";
 import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
@@ -68,7 +69,9 @@ function assignmentFormBody(assignment) {
 }
 
 function openAssignmentForm(assignment, onSaved) {
-  openModal({
+  let draft = null;
+
+  const created = openModal({
     title: assignment ? "과제 수정" : "과제 내기",
     body: assignmentFormBody(assignment),
     actions: [
@@ -111,6 +114,7 @@ function openAssignmentForm(assignment, onSaved) {
         if (assignment) await assignments.update(assignment.id, fields);
         else await assignments.add({ ...fields, authorUid: session.uid() });
 
+        draft?.done();
         toast(assignment ? "과제를 수정했습니다." : "과제를 냈습니다.", "success");
         onSaved();
       } catch (error) {
@@ -121,13 +125,24 @@ function openAssignmentForm(assignment, onSaved) {
       return true;
     },
   });
+
+  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
+  draft = attachDraft(created, `assignment:${assignment?.id ?? "new"}`, [
+    "title",
+    "body",
+    "dueDate",
+    "targets",
+    "links",
+  ]);
 }
 
 /* =========================================================
    제출하기 (학생)
    ========================================================= */
 function openSubmissionForm(assignment, mine, onSaved) {
-  openModal({
+  let draft = null;
+
+  const created = openModal({
     title: mine ? "제출물 수정" : "과제 제출",
     subtitle: assignment.title,
     body: `
@@ -178,6 +193,7 @@ function openSubmissionForm(assignment, mine, onSaved) {
         if (mine) await submissions.update(mine.id, fields);
         else await submissions.add(fields);
 
+        draft?.done();
         toast(mine ? "제출물을 수정했습니다." : "과제를 제출했습니다.", "success");
         onSaved();
       } catch (error) {
@@ -188,6 +204,8 @@ function openSubmissionForm(assignment, mine, onSaved) {
       return true;
     },
   });
+
+  draft = attachDraft(created, `submission:${assignment.id}`, ["text", "links"]);
 }
 
 /* =========================================================

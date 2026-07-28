@@ -183,9 +183,31 @@ function patch(name, id, fields) {
   );
 }
 
-function remove(name, id) {
-  return guard(deleteDoc(doc(collectionRef(name), id)), "삭제하지 못했습니다.");
+/**
+ * 지운 글은 바로 없애지 않고 deletedAt 을 적어 감춥니다.
+ * 목록에서는 빠지지만 휴지통에서 되살릴 수 있습니다.
+ */
+function softDelete(name, id) {
+  return guard(
+    updateDoc(doc(collectionRef(name), id), { deletedAt: now() }),
+    "삭제하지 못했습니다."
+  );
 }
+
+function restore(name, id) {
+  return guard(
+    updateDoc(doc(collectionRef(name), id), { deletedAt: null }),
+    "되살리지 못했습니다."
+  );
+}
+
+/** 완전히 지웁니다. 되돌릴 수 없습니다. */
+function purge(name, id) {
+  return guard(deleteDoc(doc(collectionRef(name), id)), "완전히 지우지 못했습니다.");
+}
+
+const live = (name) => cache[name].filter((row) => !row.deletedAt);
+const deleted = (name) => cache[name].filter((row) => row.deletedAt);
 
 const byNewest = (a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""));
 
@@ -218,7 +240,7 @@ export const profiles = {
 
 export const notices = {
   all() {
-    return cache.notices.slice().sort(byNewest);
+    return live("notices").sort(byNewest);
   },
   find(id) {
     return cache.notices.find((n) => n.id === id) ?? null;
@@ -230,13 +252,22 @@ export const notices = {
     return patch("notices", id, fields);
   },
   remove(id) {
-    return remove("notices", id);
+    return softDelete("notices", id);
+  },
+  restore(id) {
+    return restore("notices", id);
+  },
+  purge(id) {
+    return purge("notices", id);
+  },
+  trash() {
+    return deleted("notices").sort(byNewest);
   },
 };
 
 export const assignments = {
   all() {
-    return cache.assignments.slice().sort(byNewest);
+    return live("assignments").sort(byNewest);
   },
   find(id) {
     return cache.assignments.find((a) => a.id === id) ?? null;
@@ -248,21 +279,30 @@ export const assignments = {
     return patch("assignments", id, fields);
   },
   remove(id) {
-    return remove("assignments", id);
+    return softDelete("assignments", id);
+  },
+  restore(id) {
+    return restore("assignments", id);
+  },
+  purge(id) {
+    return purge("assignments", id);
+  },
+  trash() {
+    return deleted("assignments").sort(byNewest);
   },
 };
 
 export const submissions = {
   all() {
-    return cache.submissions.slice().sort(byNewest);
+    return live("submissions").sort(byNewest);
   },
   forAssignment(assignmentId) {
-    return cache.submissions.filter((s) => s.assignmentId === assignmentId).sort(byNewest);
+    return live("submissions").filter((s) => s.assignmentId === assignmentId).sort(byNewest);
   },
   /** 학생 본인이 특정 과제에 낸 제출물. */
   mine(assignmentId) {
     return (
-      cache.submissions.find(
+      live("submissions").find(
         (s) => s.assignmentId === assignmentId && s.studentUid === currentUid
       ) ?? null
     );
@@ -274,19 +314,28 @@ export const submissions = {
     return patch("submissions", id, fields);
   },
   remove(id) {
-    return remove("submissions", id);
+    return softDelete("submissions", id);
+  },
+  restore(id) {
+    return restore("submissions", id);
+  },
+  purge(id) {
+    return purge("submissions", id);
+  },
+  trash() {
+    return deleted("submissions").sort(byNewest);
   },
 };
 
 export const portfolios = {
   all() {
-    return cache.portfolios.slice().sort(byNewest);
+    return live("portfolios").sort(byNewest);
   },
   forStudent(uid) {
-    return cache.portfolios.filter((p) => p.studentUid === uid).sort(byNewest);
+    return live("portfolios").filter((p) => p.studentUid === uid).sort(byNewest);
   },
   mine() {
-    return cache.portfolios.filter((p) => p.studentUid === currentUid).sort(byNewest);
+    return live("portfolios").filter((p) => p.studentUid === currentUid).sort(byNewest);
   },
   find(id) {
     return cache.portfolios.find((p) => p.id === id) ?? null;
@@ -298,7 +347,16 @@ export const portfolios = {
     return patch("portfolios", id, fields);
   },
   remove(id) {
-    return remove("portfolios", id);
+    return softDelete("portfolios", id);
+  },
+  restore(id) {
+    return restore("portfolios", id);
+  },
+  purge(id) {
+    return purge("portfolios", id);
+  },
+  trash() {
+    return deleted("portfolios").sort(byNewest);
   },
 };
 
@@ -307,3 +365,29 @@ export const session = {
   uid: () => currentUid,
   role: () => currentRole,
 };
+
+/**
+ * 학생 탈퇴 — 내가 올린 것과 내 정보를 완전히 지웁니다.
+ *
+ * 졸업하거나 더 이상 쓰지 않을 때 씁니다.
+ * 휴지통을 거치지 않고 바로 없애며, 구글 계정 자체는 건드리지 않습니다.
+ *
+ * @returns {Promise<{ submissions: number, portfolios: number }>}
+ */
+export async function withdraw() {
+  if (!currentUid) throw new Error("로그인 상태를 확인할 수 없습니다.");
+
+  // 휴지통에 있던 것까지 모두 지웁니다.
+  const mySubmissions = cache.submissions.filter((row) => row.studentUid === currentUid);
+  const myPortfolios = cache.portfolios.filter((row) => row.studentUid === currentUid);
+
+  for (const row of mySubmissions) await purge("submissions", row.id);
+  for (const row of myPortfolios) await purge("portfolios", row.id);
+
+  await guard(
+    deleteDoc(doc(collectionRef("profiles"), currentUid)),
+    "학생 정보를 지우지 못했습니다."
+  );
+
+  return { submissions: mySubmissions.length, portfolios: myPortfolios.length };
+}
