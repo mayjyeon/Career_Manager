@@ -10,6 +10,7 @@ import {
   openModal,
   showFormError,
   clearFormError,
+  confirmDialog,
   downloadBlob,
   toast,
 } from "../ui.js";
@@ -41,6 +42,10 @@ function sessionCard(session) {
         }
       </div>
       <p class="session__content">${esc(session.content)}</p>
+      <div class="session__actions">
+        <button class="btn btn--secondary btn--sm" data-edit-session="${session.id}">수정</button>
+        <button class="btn btn--danger btn--sm" data-remove-session="${session.id}">삭제</button>
+      </div>
       ${
         meta.length
           ? `<div class="session__meta">
@@ -56,52 +61,58 @@ function sessionCard(session) {
     </article>`;
 }
 
-function sessionFormBody(nextNo) {
+function sessionFormBody(nextNo, session) {
+  const date = session ? formatDate(session.sessionDate) : formatDate(new Date());
+  const duration = session ? (session.durationMinutes ?? "") : DEFAULT_DURATION;
+
   return `
     <div class="form-grid form-grid--3">
       <div class="field">
         <label class="field__label" for="s-date">상담 날짜</label>
-        <input class="input" id="s-date" name="sessionDate" type="date"
-               value="${formatDate(new Date())}" />
+        <input class="input" id="s-date" name="sessionDate" type="date" value="${date}" />
       </div>
       <div class="field">
         <label class="field__label" for="s-category">상담 분류</label>
         <select class="select" id="s-category" name="category">
-          ${CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}
+          ${CATEGORIES.map(
+            (c) =>
+              `<option value="${esc(c)}" ${session?.category === c ? "selected" : ""}>${esc(c)}</option>`
+          ).join("")}
         </select>
       </div>
       <div class="field">
         <label class="field__label" for="s-duration">소요시간(분)</label>
         <input class="input" id="s-duration" name="duration" inputmode="numeric"
-               value="${DEFAULT_DURATION}" />
+               value="${duration}" />
       </div>
     </div>
     <div class="field">
       <label class="field__label" for="s-content">상담 내용</label>
       <textarea class="textarea" id="s-content" name="content" rows="6"
-                placeholder="${nextNo}회기 상담 내용을 입력하세요."></textarea>
+                placeholder="${nextNo}회기 상담 내용을 입력하세요.">${esc(session?.content ?? "")}</textarea>
     </div>
     <div class="form-grid">
       <div class="field">
         <label class="field__label" for="s-follow">후속 조치</label>
         <textarea class="textarea" id="s-follow" name="followUp" rows="3"
-                  placeholder="선택 입력"></textarea>
+                  placeholder="선택 입력">${esc(session?.followUpAction ?? "")}</textarea>
       </div>
       <div class="field">
         <label class="field__label" for="s-next">다음 계획</label>
         <textarea class="textarea" id="s-next" name="nextPlan" rows="3"
-                  placeholder="선택 입력"></textarea>
+                  placeholder="선택 입력">${esc(session?.nextPlan ?? "")}</textarea>
       </div>
     </div>`;
 }
 
-function openSessionForm(student, onSaved) {
-  const nextNo = counselingService.getForStudent(student.id).length + 1;
+/** 상담 기록을 추가하거나 고칩니다. session 이 없으면 추가입니다. */
+function openSessionForm(student, session, onSaved) {
+  const nextNo = session?.sessionNo ?? counselingService.getForStudent(student.id).length + 1;
 
   openModal({
-    title: "상담 기록 추가",
+    title: session ? `${nextNo}회기 상담 기록 수정` : "상담 기록 추가",
     subtitle: `대상: ${student.affiliation} · ${student.name}`,
-    body: sessionFormBody(nextNo),
+    body: sessionFormBody(nextNo, session),
     actions: [
       { label: "취소", variant: "secondary", value: "cancel" },
       { label: "저장", variant: "primary", value: "submit" },
@@ -129,17 +140,36 @@ function openSessionForm(student, onSaved) {
       const raw = get("sessionDate");
       const date = raw ? new Date(`${raw}T00:00:00`) : new Date();
 
-      const no = counselingService.add(
-        student.id,
-        date.toISOString(),
-        get("category"),
-        content,
-        get("followUp") || null,
-        get("nextPlan") || null,
-        duration
-      );
+      if (session) {
+        const result = counselingService.update(session.id, {
+          date: date.toISOString(),
+          category: get("category"),
+          content,
+          followUp: get("followUp") || null,
+          nextPlan: get("nextPlan") || null,
+          durationMinutes: duration,
+        });
 
-      toast(`${no}회기 상담 기록을 저장했습니다.`, "success");
+        if (!result.ok) {
+          showFormError(form, result.error);
+          return false;
+        }
+
+        toast(`${nextNo}회기 상담 기록을 수정했습니다.`, "success");
+      } else {
+        const no = counselingService.add(
+          student.id,
+          date.toISOString(),
+          get("category"),
+          content,
+          get("followUp") || null,
+          get("nextPlan") || null,
+          duration
+        );
+
+        toast(`${no}회기 상담 기록을 저장했습니다.`, "success");
+      }
+
       onSaved();
       return true;
     },
@@ -419,7 +449,38 @@ export function render(container, { navigate }) {
 
   container.querySelectorAll("[data-add]").forEach((btn) =>
     btn.addEventListener("click", () => {
-      if (selected) openSessionForm(selected, rerender);
+      if (selected) openSessionForm(selected, null, rerender);
+    })
+  );
+
+  container.querySelectorAll("[data-edit-session]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const record = sessions.find((s) => s.id === btn.dataset.editSession);
+      if (selected && record) openSessionForm(selected, record, rerender);
+    })
+  );
+
+  container.querySelectorAll("[data-remove-session]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const record = sessions.find((s) => s.id === btn.dataset.removeSession);
+      if (!record) return;
+
+      const ok = await confirmDialog({
+        title: "상담 기록 삭제",
+        message:
+          `${record.sessionNo ?? ""}회기 상담 기록을 삭제할까요?\n` +
+          "휴지통으로 들어가며 30일 안에는 되살릴 수 있습니다.",
+        confirmLabel: "삭제",
+      });
+      if (!ok) return;
+
+      try {
+        await counselingService.remove(record.id);
+        toast("상담 기록을 휴지통으로 옮겼습니다.");
+        rerender();
+      } catch (error) {
+        toast(error?.message ?? "삭제하지 못했습니다.", "error");
+      }
     })
   );
 }

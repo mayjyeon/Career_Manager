@@ -1,5 +1,6 @@
 /** 공지사항 — 선생님이 올리고 학생이 봅니다. */
 import { notices, profiles, session } from "../board.js";
+import { attachDraft } from "../drafts.js";
 import { parseLinks } from "../links.js";
 import { TEACHER, describeTargets, formatTargets, matchesTargets, parseTargets } from "../roles.js";
 import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
@@ -41,7 +42,9 @@ function noticeFormBody(notice) {
 }
 
 function openNoticeForm(notice, onSaved) {
-  openModal({
+  let draft = null;
+
+  const created = openModal({
     title: notice ? "공지 수정" : "공지 작성",
     subtitle: notice ? "" : "학생 화면에도 그대로 보입니다.",
     body: noticeFormBody(notice),
@@ -79,6 +82,7 @@ function openNoticeForm(notice, onSaved) {
         if (notice) await notices.update(notice.id, fields);
         else await notices.add({ ...fields, authorUid: session.uid() });
 
+        draft?.done();
         toast(notice ? "공지를 수정했습니다." : "공지를 올렸습니다.", "success");
         onSaved();
       } catch (error) {
@@ -89,6 +93,9 @@ function openNoticeForm(notice, onSaved) {
       return true;
     },
   });
+
+  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
+  draft = attachDraft(created, `notice:${notice?.id ?? "new"}`, ["title", "body", "targets", "links"]);
 }
 
 /* =========================================================

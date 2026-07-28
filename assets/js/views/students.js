@@ -1,6 +1,7 @@
 /** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드, 학생 계정 연결 확인. */
 import { studentService } from "../services.js";
 import { profiles } from "../board.js";
+import { TRASH_DAYS } from "../trash.js";
 import { readSpreadsheet, SheetError } from "../sheet.js";
 import { parseRoster, buildImportPlan } from "../roster.js";
 import {
@@ -19,9 +20,16 @@ export const meta = { id: "students", icon: "👥", title: "학생 관리" };
 // 화면을 다시 그려도 검색 조건은 유지합니다.
 const filter = { name: "", grade: "", classNo: "" };
 
+// 일괄 삭제를 위해 고른 학생.
+const selected = new Set();
+
 function row(item) {
   return `
     <tr data-id="${item.id}">
+      <td class="check">
+        <input type="checkbox" data-select="${item.id}" aria-label="${esc(item.name)} 선택"
+               ${selected.has(item.id) ? "checked" : ""} />
+      </td>
       <td>
         <div class="person">
           <div class="avatar" aria-hidden="true">${esc(initials(item.name))}</div>
@@ -390,6 +398,11 @@ export function render(container) {
   const hasFilter = Boolean(filter.name || filter.grade || filter.classNo);
   const rerender = () => render(container);
 
+  // 검색 조건이 바뀌어 사라진 학생은 선택에서도 뺍니다.
+  const visible = new Set(items.map((item) => item.id));
+  for (const id of selected) if (!visible.has(id)) selected.delete(id);
+  const chosen = [...selected];
+
   container.innerHTML = `
     <div class="page-head">
       <div>
@@ -426,6 +439,16 @@ export function render(container) {
       </form>
     </section>
 
+    ${
+      chosen.length
+        ? `<div class="bulk-bar">
+             <span><b>${chosen.length}명</b> 선택됨</span>
+             <button class="btn btn--danger btn--sm" data-bulk-delete>선택 학생 삭제</button>
+             <button class="btn btn--ghost btn--sm" data-bulk-clear>선택 해제</button>
+           </div>`
+        : ""
+    }
+
     <section class="card card--flush">
       ${
         items.length
@@ -433,6 +456,10 @@ export function render(container) {
                <table class="table">
                  <thead>
                    <tr>
+                     <th class="check">
+                       <input type="checkbox" data-select-all aria-label="모두 선택"
+                              ${chosen.length && chosen.length === items.length ? "checked" : ""} />
+                     </th>
                      <th>학생</th>
                      <th class="num">상담</th>
                      <th>메모</th>
@@ -495,6 +522,57 @@ export function render(container) {
       if (data) openStudentForm(data, rerender);
     })
   );
+
+  /* --- 일괄 삭제 --- */
+  container.querySelectorAll("[data-select]").forEach((box) =>
+    box.addEventListener("change", () => {
+      if (box.checked) selected.add(box.dataset.select);
+      else selected.delete(box.dataset.select);
+      rerender();
+    })
+  );
+
+  container.querySelector("[data-select-all]")?.addEventListener("change", (event) => {
+    if (event.target.checked) items.forEach((item) => selected.add(item.id));
+    else selected.clear();
+    rerender();
+  });
+
+  container.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+    selected.clear();
+    rerender();
+  });
+
+  container.querySelector("[data-bulk-delete]")?.addEventListener("click", async () => {
+    const names = chosen
+      .map((id) => items.find((item) => item.id === id)?.name)
+      .filter(Boolean);
+
+    const sessionCount = chosen.reduce(
+      (sum, id) => sum + (items.find((item) => item.id === id)?.sessionCount ?? 0),
+      0
+    );
+
+    const ok = await confirmDialog({
+      title: "학생 삭제",
+      message:
+        `${names.slice(0, 5).join(", ")}${names.length > 5 ? ` 외 ${names.length - 5}명` : ""}` +
+        ` 학생 ${chosen.length}명을 삭제할까요?\n` +
+        (sessionCount ? `상담 기록 ${sessionCount}건도 함께 지워집니다.\n` : "") +
+        `휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.`,
+      confirmLabel: "삭제",
+    });
+    if (!ok) return;
+
+    try {
+      await studentService.removeStudents(chosen);
+      toast(`학생 ${chosen.length}명을 휴지통으로 옮겼습니다.`);
+      selected.clear();
+      rerender();
+    } catch (error) {
+      toast(error?.message ?? "삭제하지 못했습니다.", "error");
+    }
+  });
 
   container.querySelectorAll("[data-deactivate]").forEach((btn) =>
     btn.addEventListener("click", async () => {

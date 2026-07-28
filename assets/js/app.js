@@ -15,13 +15,26 @@ import * as notices from "./views/notices.js";
 import * as assignments from "./views/assignments.js";
 import * as portfolio from "./views/portfolio.js";
 import * as studentHome from "./views/student-home.js";
-import { statistics } from "./views/placeholder.js";
+import * as statistics from "./views/statistics.js";
+import * as usage from "./views/usage.js";
+import * as trash from "./views/trash.js";
 import { profileFields, readProfileForm } from "./views/profile-form.js";
+import { purgeExpired } from "./trash.js";
 
 /** 역할에 따라 보이는 메뉴가 다릅니다. */
 const VIEWS = {
-  teacher: [dashboard, students, counseling, notices, assignments, portfolio, statistics],
-  student: [studentHome, notices, assignments, portfolio],
+  teacher: [
+    dashboard,
+    students,
+    counseling,
+    notices,
+    assignments,
+    portfolio,
+    statistics,
+    usage,
+    trash,
+  ],
+  student: [studentHome, notices, assignments, portfolio, trash],
 };
 
 let views = VIEWS.teacher;
@@ -351,6 +364,9 @@ async function handleUserChange(user) {
   showAuthError("");
   showScreen("app");
   navigate(window.location.hash.slice(1) || views[0].meta.id, { updateHash: false });
+
+  // 서버가 따로 없어 보관 기간이 지난 휴지통은 이때 정리합니다.
+  purgeExpired(role).catch(() => {});
 }
 
 /* =========================================================
