@@ -5,7 +5,13 @@
 import { initFirebase, FirebaseConfigError } from "./firebase.js";
 import { signInWithGoogle, signOutUser, watchUser } from "./auth.js";
 import { startSync, stopSync } from "./store.js";
-import { profiles, startBoardSync, stopBoardSync } from "./board.js";
+import {
+  ensureSubscribed,
+  isSubscribed,
+  profiles,
+  startBoardSync,
+  stopBoardSync,
+} from "./board.js";
 import { TEACHER, roleOf } from "./roles.js";
 import { closeModal, esc, toast } from "./ui.js";
 import * as dashboard from "./views/dashboard.js";
@@ -18,7 +24,6 @@ import * as studentHome from "./views/student-home.js";
 import * as statistics from "./views/statistics.js";
 import * as trash from "./views/trash.js";
 import { profileFields, readProfileForm } from "./views/profile-form.js";
-import { purgeExpired } from "./trash.js";
 
 /** 역할에 따라 보이는 메뉴가 다릅니다. */
 const VIEWS = {
@@ -160,6 +165,28 @@ function markActive(id) {
 function renderCurrentView() {
   if (!currentId) return;
   const view = byId.get(currentId) ?? views[0];
+  const needs = view.meta.needs ?? [];
+
+  // 화면마다 필요한 자료는 그 화면을 열 때 구독합니다.
+  // 로그인하자마자 전부 붙이면 보지도 않을 자료까지 읽어 오게 됩니다.
+  if (needs.length > 0 && !isSubscribed(needs)) {
+    elements.view.innerHTML = `
+      <div class="card card--quiet">
+        <p class="muted">불러오는 중…</p>
+      </div>`;
+
+    ensureSubscribed(needs).then(scheduleRerender, (error) => {
+      elements.view.innerHTML = "";
+      toast(
+        error?.code === "permission-denied"
+          ? "자료에 접근할 권한이 없습니다. Firestore 보안 규칙을 다시 배포해주세요."
+          : "자료를 불러오지 못했습니다.",
+        "error"
+      );
+    });
+    return;
+  }
+
   elements.view.innerHTML = "";
   view.render(elements.view, { navigate });
 }
@@ -353,9 +380,6 @@ async function handleUserChange(user) {
   showAuthError("");
   showScreen("app");
   navigate(window.location.hash.slice(1) || views[0].meta.id, { updateHash: false });
-
-  // 서버가 따로 없어 보관 기간이 지난 휴지통은 이때 정리합니다.
-  purgeExpired(role).catch(() => {});
 }
 
 /* =========================================================

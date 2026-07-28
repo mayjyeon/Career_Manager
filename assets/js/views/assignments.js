@@ -14,7 +14,7 @@ import {
   toast,
 } from "../ui.js";
 
-export const meta = { id: "assignments", icon: "📝", title: "과제" };
+export const meta = { id: "assignments", icon: "📝", title: "과제", needs: ["submissions"] };
 
 // 펼쳐 둔 과제를 화면을 다시 그려도 기억합니다.
 const expanded = new Set();

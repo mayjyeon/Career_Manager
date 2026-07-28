@@ -33,7 +33,7 @@ async function confirmWithdraw() {
   }
 }
 
-export const meta = { id: "home", icon: "🏠", title: "홈" };
+export const meta = { id: "home", icon: "🏠", title: "홈", needs: ["submissions", "portfolios"] };
 
 /** 마감이 지나지 않았거나 아직 안 낸 과제를 앞에 둡니다. */
 function sortAssignments(items) {

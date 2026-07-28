@@ -5,8 +5,12 @@ rules_version = '2';
  *
  * 두 종류의 자료가 있습니다.
  *
- *   users/{uid}/…   상담 기록. 선생님 계정 안에만 있고 본인만 읽고 씁니다.
+ *   users/{uid}/…   학생 명부와 상담 기록. 선생님 계정 안에만 있고 본인만 읽고 씁니다.
  *   그 밖의 컬렉션   공지·과제·제출물·포트폴리오. 선생님과 학생이 함께 봅니다.
+ *
+ * 학생은 한 명당 문서 하나가 아니라 한 반이 문서 하나(classes)입니다.
+ * Firestore 는 리스너로 배달된 문서마다 읽기를 매기므로, 900명을 낱개 문서로 두면
+ * 명렬표 한 번 올릴 때 읽기·쓰기가 각각 수천 건씩 나옵니다.
  *
  * 선생님은 아래 이메일로 로그인한 계정 하나뿐입니다.
  * 이 값을 바꿀 때는 assets/js/roles.js 의 TEACHER_EMAIL 도 함께 고쳐야 합니다.
@@ -31,18 +35,32 @@ service cloud.firestore {
     }
 
     function isKnownCollection(name) {
-      return name in ['students', 'schoolYears', 'sessions'];
+      return name in ['classes', 'sessions'];
+    }
+
+    /**
+     * 이전 형식으로 남아 있는 컬렉션.
+     * 학생 관리 화면의 ‘옛 문서 정리’ 로 지울 수 있게 읽기와 삭제만 열어 둡니다.
+     * 정리를 마쳤으면 아래 match 블록을 통째로 지워도 됩니다.
+     */
+    function isLegacyCollection(name) {
+      return name in ['students', 'schoolYears'];
     }
 
     /* ---------------------------------------------------------
-       상담 기록 — 선생님 계정 안에만 있습니다.
+       학생 명부 · 상담 기록 — 선생님 계정 안에만 있습니다.
+
+       classes 문서 하나에 한 반 학생이 배열로 들어 있어
+       최상위 필드는 다섯 개(schoolYear·grade·classNo·students·updatedAt)뿐입니다.
        --------------------------------------------------------- */
     match /users/{userId}/{collectionName}/{docId} {
-      allow read: if isOwner(userId) && isKnownCollection(collectionName);
+      allow read: if isOwner(userId)
+        && (isKnownCollection(collectionName) || isLegacyCollection(collectionName));
       allow create, update: if isOwner(userId)
         && isKnownCollection(collectionName)
         && request.resource.data.keys().size() <= 20;
-      allow delete: if isOwner(userId) && isKnownCollection(collectionName);
+      allow delete: if isOwner(userId)
+        && (isKnownCollection(collectionName) || isLegacyCollection(collectionName));
     }
 
     /* ---------------------------------------------------------

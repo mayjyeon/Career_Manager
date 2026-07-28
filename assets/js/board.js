@@ -59,39 +59,94 @@ function notifyError(error, fallback) {
 
 /* =========================================================
    동기화
+
+   Firestore 는 리스너로 배달된 문서 1개당 읽기 1건을 매깁니다.
+   학생이 900명이면 profiles 만으로도 선생님이 로그인할 때마다 900건입니다.
+   그래서 로그인에 꼭 필요한 것만 먼저 붙이고, 나머지는 그 화면을 열 때 붙입니다.
    ========================================================= */
-/** 역할에 따라 구독할 목록을 정합니다. */
-function subscriptions(uid, role) {
-  if (role === TEACHER) {
-    return [
-      { name: "profiles", source: collectionRef("profiles") },
-      { name: "notices", source: collectionRef("notices") },
-      { name: "assignments", source: collectionRef("assignments") },
-      { name: "submissions", source: collectionRef("submissions") },
-      { name: "portfolios", source: collectionRef("portfolios") },
-    ];
-  }
+/** 어떤 화면에서든 필요하고 양도 적어 로그인할 때 바로 붙이는 것. */
+const CORE = ["notices", "assignments"];
+
+/** 구독 하나를 만드는 방법. 역할에 따라 보는 범위가 다릅니다. */
+function sourceOf(name, uid, role) {
+  if (role === TEACHER) return { source: collectionRef(name) };
 
   // 학생은 공지·과제는 전부, 자기 정보와 제출물·포트폴리오는 자기 것만 봅니다.
-  return [
+  if (name === "profiles") {
     // 내 정보는 문서 하나라 목록으로 훑지 않고 그 문서만 봅니다.
-    { name: "profiles", source: doc(collectionRef("profiles"), uid), single: true },
-    { name: "notices", source: collectionRef("notices") },
-    { name: "assignments", source: collectionRef("assignments") },
-    {
-      name: "submissions",
-      source: query(collectionRef("submissions"), where("studentUid", "==", uid)),
+    return { source: doc(collectionRef("profiles"), uid), single: true };
+  }
+  if (name === "submissions" || name === "portfolios") {
+    return { source: query(collectionRef(name), where("studentUid", "==", uid)) };
+  }
+  return { source: collectionRef(name) };
+}
+
+/** 이름 → { unsubscribe, ready, done } */
+const active = new Map();
+
+function subscribe(name) {
+  if (active.has(name)) return active.get(name).ready;
+
+  const { source, single } = sourceOf(name, currentUid, currentRole);
+  let settle;
+  const ready = new Promise((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+
+  const entry = { unsubscribe: null, ready, done: false };
+  active.set(name, entry);
+
+  entry.unsubscribe = onSnapshot(
+    source,
+    (snapshot) => {
+      cache[name] = single
+        ? snapshot.exists()
+          ? [{ id: snapshot.id, ...snapshot.data() }]
+          : []
+        : snapshot.docs.map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }));
+
+      if (!entry.done) {
+        entry.done = true;
+        settle.resolve();
+      }
+      notifyChange();
     },
-    {
-      name: "portfolios",
-      source: query(collectionRef("portfolios"), where("studentUid", "==", uid)),
-    },
-  ];
+    (error) => {
+      if (!entry.done) {
+        // 다음에 그 화면을 다시 열면 새로 시도할 수 있게 지워 둡니다.
+        active.delete(name);
+        settle.reject(error);
+        return;
+      }
+      notifyError(error, "자료를 불러오는 중 문제가 발생했습니다.");
+    }
+  );
+
+  unsubscribes.push(entry.unsubscribe);
+  return ready;
+}
+
+/** 이 자료의 첫 배달이 끝났는지. */
+export function isSubscribed(names) {
+  return names.every((name) => active.get(name)?.done === true);
 }
 
 /**
- * 공용 자료를 실시간으로 구독합니다.
- * @returns {Promise<void>} 첫 데이터가 모두 도착하면 완료됩니다.
+ * 화면이 필요로 하는 자료를 그때 붙입니다.
+ * 이미 붙어 있으면 통신하지 않습니다.
+ *
+ * @param {string[]} names
+ * @returns {Promise<void>}
+ */
+export function ensureSubscribed(names) {
+  if (!currentUid) return Promise.resolve();
+  return Promise.all(names.map(subscribe)).then(() => undefined);
+}
+
+/**
+ * 로그인 직후 꼭 필요한 자료만 구독합니다.
+ * @returns {Promise<void>} 첫 데이터가 도착하면 완료됩니다.
  */
 export function startBoardSync(uid, role, { onChange, onError } = {}) {
   stopBoardSync();
@@ -101,53 +156,15 @@ export function startBoardSync(uid, role, { onChange, onError } = {}) {
   changeHandler = onChange ?? null;
   errorHandler = onError ?? null;
 
-  const targets = subscriptions(uid, role);
-
-  return new Promise((resolve, reject) => {
-    const pending = new Set(targets.map((target) => target.name));
-    let settled = false;
-
-    const markReady = (name) => {
-      if (settled) return;
-      pending.delete(name);
-      if (pending.size === 0) {
-        settled = true;
-        resolve();
-      }
-    };
-
-    for (const { name, source, single } of targets) {
-      const unsubscribe = onSnapshot(
-        source,
-        (snapshot) => {
-          const rows = single
-            ? snapshot.exists()
-              ? [{ id: snapshot.id, ...snapshot.data() }]
-              : []
-            : snapshot.docs.map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }));
-
-          cache[name] = rows;
-          markReady(name);
-          notifyChange();
-        },
-        (error) => {
-          if (!settled) {
-            settled = true;
-            reject(error);
-            return;
-          }
-          notifyError(error, "자료를 불러오는 중 문제가 발생했습니다.");
-        }
-      );
-
-      unsubscribes.push(unsubscribe);
-    }
-  });
+  // 학생은 자기 정보가 있어야 첫 화면을 열지 말지 정할 수 있습니다(문서 하나).
+  const names = role === TEACHER ? CORE : ["profiles", ...CORE];
+  return ensureSubscribed(names);
 }
 
 export function stopBoardSync() {
   unsubscribes.forEach((unsubscribe) => unsubscribe());
   unsubscribes = [];
+  active.clear();
   cache = emptyCache();
   currentUid = null;
   currentRole = null;

@@ -1,6 +1,7 @@
 /** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드, 학생 계정 연결 확인. */
 import { studentService } from "../services.js";
-import { profiles } from "../board.js";
+import { profiles, session } from "../board.js";
+import { hasLegacyData, purgeLegacyData } from "../legacy.js";
 import { TRASH_DAYS } from "../trash.js";
 import { readSpreadsheet, SheetError } from "../sheet.js";
 import { parseRoster, buildImportPlan } from "../roster.js";
@@ -15,7 +16,7 @@ import {
   toast,
 } from "../ui.js";
 
-export const meta = { id: "students", icon: "👥", title: "학생 관리" };
+export const meta = { id: "students", icon: "👥", title: "학생 관리", needs: ["profiles"] };
 
 // 화면을 다시 그려도 검색 조건은 유지합니다.
 const filter = { name: "", grade: "", classNo: "" };
@@ -385,6 +386,75 @@ function accountSection() {
     </section>`;
 }
 
+/* =========================================================
+   이전 형식 자료 정리
+
+   확인은 컬렉션마다 한 건만 꺼내 보므로 읽기 2건이면 끝납니다.
+   남아 있을 때만 카드를 띄웁니다.
+   ========================================================= */
+const legacy = { checked: false, found: false };
+
+function legacySection() {
+  if (!legacy.found) return "";
+
+  return `
+    <section class="card card--quiet" style="margin-top:16px">
+      <h2 class="section-title">이전 형식 자료가 남아 있습니다</h2>
+      <p class="muted" style="margin:8px 0 12px">
+        예전에는 학생 한 명이 문서 하나였습니다. 지금은 한 반이 문서 하나라
+        옛 문서는 더 이상 쓰이지 않습니다. 읽어 오지 않으므로 평소 사용량에는
+        영향이 없지만, 정리해 두면 데이터베이스가 깔끔해집니다.
+      </p>
+      <p class="caption" style="margin-bottom:12px">
+        지우려면 어떤 문서가 있는지 먼저 읽어야 해서 한 번만 읽기·쓰기가 발생합니다.
+        학생 900명 기준 각각 1,800건 정도이며, 하루 무료 한도(읽기 5만·쓰기 2만) 안에 들어갑니다.
+      </p>
+      <button class="btn btn--danger" data-purge-legacy>옛 문서 정리</button>
+    </section>`;
+}
+
+function watchLegacy(container, rerender) {
+  if (!legacy.checked) {
+    legacy.checked = true;
+    hasLegacyData(session.uid())
+      .then((found) => {
+        if (found) {
+          legacy.found = true;
+          rerender();
+        }
+      })
+      .catch(() => {
+        // 권한이 없거나 연결이 끊겼으면 조용히 넘어갑니다.
+      });
+  }
+
+  container.querySelector("[data-purge-legacy]")?.addEventListener("click", async (event) => {
+    const ok = await confirmDialog({
+      title: "옛 문서를 정리할까요?",
+      message:
+        "지금 쓰는 학생 자료(반 문서)는 그대로 두고, 이전 형식으로 남은 문서만 지웁니다. 되돌릴 수 없습니다.",
+      confirmText: "정리",
+      danger: true,
+    });
+    if (!ok) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "정리하는 중…";
+
+    try {
+      const count = await purgeLegacyData(session.uid());
+      legacy.found = false;
+      toast(`옛 문서 ${count}건을 정리했습니다.`, "success");
+      rerender();
+    } catch {
+      button.disabled = false;
+      button.textContent = "옛 문서 정리";
+      toast("정리하지 못했습니다. 잠시 후 다시 시도해주세요.", "error");
+    }
+  });
+}
+
 export function render(container) {
   const grade = Number.parseInt(filter.grade, 10);
   const classNo = Number.parseInt(filter.classNo, 10);
@@ -482,9 +552,12 @@ export function render(container) {
       }
     </section>
 
-    ${accountSection()}`;
+    ${accountSection()}
+    ${legacySection()}`;
 
   /* --- 이벤트 --- */
+  watchLegacy(container, rerender);
+
   const form = container.querySelector("[data-search]");
   form.addEventListener("submit", (event) => {
     event.preventDefault();
