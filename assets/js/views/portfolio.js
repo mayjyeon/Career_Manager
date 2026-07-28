@@ -16,7 +16,7 @@ import {
   toast,
 } from "../ui.js";
 
-export const meta = { id: "portfolio", icon: "🎒", title: "포트폴리오" };
+export const meta = { id: "portfolio", icon: "🎒", title: "포트폴리오", needs: ["portfolios", "profiles"] };
 
 // 선생님 화면에서 펼쳐 둔 학생을 기억합니다.
 const expanded = new Set();

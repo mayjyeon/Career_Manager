@@ -8,7 +8,7 @@
  * 선생님이 앱을 열 때 지난 것을 찾아 지우는 방식으로 동작합니다.
  */
 import {
-  commitAll,
+  commitSessions,
   purge as purgeOwn,
   restore as restoreOwn,
   softDelete as softDeleteOwn,
@@ -43,13 +43,16 @@ const boardKinds = [
 ];
 
 function studentLabel(student) {
-  return student.name ?? "이름 없음";
+  const name = student.name ?? "이름 없음";
+  return student.grade == null
+    ? name
+    : `${student.grade}학년 ${student.classNo}반 ${student.studentNo}번 · ${name}`;
 }
 
 /**
  * 휴지통에 있는 항목을 한 목록으로 모읍니다.
  *
- * 학생을 지울 때 함께 들어간 소속·상담 기록은 따로 보여주지 않습니다
+ * 학생을 지울 때 함께 들어간 상담 기록은 따로 보여주지 않습니다
  * (deletedWith 가 붙어 있습니다). 학생을 되살리면 같이 돌아옵니다.
  *
  * @param {string} role
@@ -63,7 +66,7 @@ export function listTrash(role) {
       items.push({
         kind: "학생",
         title: studentLabel(student),
-        detail: "소속과 상담 기록도 함께 들어 있습니다.",
+        detail: "상담 기록도 함께 들어 있습니다.",
         deletedAt: student.deletedAt,
         source: "own",
         collection: "students",
@@ -109,18 +112,12 @@ export function listTrash(role) {
    ========================================================= */
 const boardStore = (name) => boardKinds.find((k) => k.key === name)?.store ?? null;
 
-/** 학생과 함께 지워진 소속·상담 기록의 문서 번호. */
-function relatedIds(studentId) {
-  return {
-    schoolYears: ownTrash
-      .schoolYears()
-      .filter((row) => row.deletedWith === studentId)
-      .map((row) => row.id),
-    sessions: ownTrash
-      .sessions()
-      .filter((row) => row.deletedWith === studentId)
-      .map((row) => row.id),
-  };
+/** 학생과 함께 지워진 상담 기록의 문서 번호. */
+function relatedSessions(studentId) {
+  return ownTrash
+    .sessions()
+    .filter((row) => row.deletedWith === studentId)
+    .map((row) => row.id);
 }
 
 export async function restoreItem(item) {
@@ -130,10 +127,9 @@ export async function restoreItem(item) {
   }
 
   if (item.collection === "students") {
-    const related = relatedIds(item.id);
+    const related = relatedSessions(item.id);
     await restoreOwn("students", item.id);
-    if (related.schoolYears.length) await restoreOwn("schoolYears", related.schoolYears);
-    if (related.sessions.length) await restoreOwn("sessions", related.sessions);
+    if (related.length) await restoreOwn("sessions", related);
     return;
   }
 
@@ -147,9 +143,8 @@ export async function purgeItem(item) {
   }
 
   if (item.collection === "students") {
-    const related = relatedIds(item.id);
-    if (related.sessions.length) await purgeOwn("sessions", related.sessions);
-    if (related.schoolYears.length) await purgeOwn("schoolYears", related.schoolYears);
+    const related = relatedSessions(item.id);
+    if (related.length) await purgeOwn("sessions", related);
     await purgeOwn("students", item.id);
     return;
   }
@@ -186,41 +181,34 @@ export async function purgeExpired(role) {
    지우기
    ========================================================= */
 /**
- * 학생을 휴지통으로 보냅니다. 소속과 상담 기록도 함께 들어갑니다.
+ * 학생을 휴지통으로 보냅니다. 상담 기록도 함께 들어갑니다.
  *
- * 함께 지운 것에는 deletedWith 를 붙여, 휴지통 목록에 따로 나오지 않고
+ * 함께 지운 기록에는 deletedWith 를 붙여, 휴지통 목록에 따로 나오지 않고
  * 학생을 되살릴 때 같이 돌아오게 합니다.
  *
+ * 학년도·학년·반·번호는 학생 행 안에 들어 있어 따로 지울 것이 없습니다.
+ *
  * @param {string[]} studentIds
- * @param {(studentId: string) => { schoolYears: string[], sessions: string[] }} findRelated
+ * @param {(studentId: string) => string[]} findSessions
  */
-export function trashStudents(studentIds, findRelated) {
+export async function trashStudents(studentIds, findSessions) {
   const deletedAt = new Date().toISOString();
-  const operations = [];
+  const sessionOps = [];
 
   for (const studentId of studentIds) {
-    const related = findRelated(studentId);
-
-    for (const name of ["schoolYears", "sessions"]) {
-      for (const id of related[name]) {
-        operations.push({
-          collection: name,
-          id,
-          mode: "update",
-          fields: { deletedAt, deletedWith: studentId },
-        });
-      }
+    for (const id of findSessions(studentId)) {
+      sessionOps.push({
+        id,
+        mode: "update",
+        fields: { deletedAt, deletedWith: studentId },
+      });
     }
-
-    operations.push({
-      collection: "students",
-      id: studentId,
-      mode: "update",
-      fields: { deletedAt },
-    });
   }
 
-  return commitAll(operations);
+  if (sessionOps.length) await commitSessions(sessionOps);
+
+  // 같은 반 학생을 여러 명 지워도 그 반 문서는 한 번만 씁니다.
+  await softDeleteOwn("students", studentIds);
 }
 
 /** 상담 기록 하나를 휴지통으로 보냅니다. */

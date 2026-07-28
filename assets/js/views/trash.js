@@ -1,9 +1,28 @@
 /** 휴지통 — 지운 자료를 되살리거나 완전히 지웁니다. */
 import { session } from "../board.js";
-import { TRASH_DAYS, daysLeft, emptyTrash, listTrash, purgeItem, restoreItem } from "../trash.js";
+import {
+  TRASH_DAYS,
+  daysLeft,
+  emptyTrash,
+  listTrash,
+  purgeExpired,
+  purgeItem,
+  restoreItem,
+} from "../trash.js";
 import { confirmDialog, emptyState, esc, relativeDate, toast } from "../ui.js";
 
-export const meta = { id: "trash", icon: "🗑️", title: "휴지통" };
+export const meta = {
+  id: "trash",
+  icon: "🗑️",
+  title: "휴지통",
+  // 휴지통은 모든 자료를 훑어야 합니다.
+  // 낸 사람 이름은 제출물 안에 함께 들어 있어 profiles 까지 볼 필요는 없습니다.
+  needs: ["submissions", "portfolios"],
+};
+
+// 보관 기간이 지난 것 정리는 이 화면을 열 때 한 번만 합니다.
+// 로그인할 때마다 하면 아직 구독하지도 않은 자료까지 훑게 됩니다.
+let purged = false;
 
 const KIND_BADGE = {
   "학생": "badge--danger",
@@ -36,6 +55,16 @@ function row(item, index) {
 export function render(container) {
   const items = listTrash(session.role());
   const rerender = () => render(container);
+
+  if (!purged) {
+    purged = true;
+    // 서버가 따로 없어 보관 기간이 지난 것은 이때 정리합니다.
+    purgeExpired(session.role())
+      .then((count) => {
+        if (count) rerender();
+      })
+      .catch(() => {});
+  }
 
   container.innerHTML = `
     <div class="page-head">

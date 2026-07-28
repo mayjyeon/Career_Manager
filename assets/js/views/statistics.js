@@ -1,5 +1,5 @@
 /** 통계 — 상담 현황을 그래프로 봅니다(선생님 전용). */
-import { schoolYears, sessions, students } from "../store.js";
+import { sessions, students } from "../store.js";
 import { FORM_CATEGORIES } from "../counseling-form.js";
 import { barList, chartTable, columnChart, shareBar } from "../chart.js";
 import { emptyState } from "../ui.js";
@@ -49,23 +49,10 @@ function categoryStats(rows) {
   }));
 }
 
-/** 학생마다 가장 최근 학년도의 학년·반을 미리 뽑아 둡니다. */
-function seatByStudent() {
-  const seats = new Map();
-
-  for (const row of schoolYears.all()) {
-    const current = seats.get(row.studentId);
-    if (!current || (row.schoolYear ?? 0) > (current.schoolYear ?? 0)) {
-      seats.set(row.studentId, row);
-    }
-  }
-
-  return seats;
-}
-
 /** 학년·반별로 학생 수와 상담 건수를 셉니다. */
 function classStats(rows) {
-  const seats = seatByStudent();
+  // 학년·반은 학생 행에 함께 붙어 옵니다(반 문서에서 펼쳐진 값).
+  const seats = new Map(students.all().map((student) => [student.id, student]));
   const groups = new Map();
 
   const groupOf = (seat) => {
@@ -76,9 +63,8 @@ function classStats(rows) {
     return groups.get(key);
   };
 
-  for (const student of students.all()) {
-    const seat = seats.get(student.id);
-    if (seat?.grade != null && seat?.classNo != null) groupOf(seat).students += 1;
+  for (const student of seats.values()) {
+    if (student.grade != null && student.classNo != null) groupOf(student).students += 1;
   }
 
   for (const row of rows) {

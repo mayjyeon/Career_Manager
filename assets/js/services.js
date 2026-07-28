@@ -3,38 +3,34 @@
  * 원본의 CareerCounseling.Wpf/Services/StudentService.cs,
  * CounselingService.cs 를 그대로 옮긴 것입니다.
  */
-import { students, schoolYears, sessions, commitAll, newId } from "./store.js";
+import { students, sessions, newId } from "./store.js";
 import { trashSession, trashStudents } from "./trash.js";
 
-/** 가장 최근 학년도의 소속 정보를 돌려줍니다. */
-function latestSchoolYear(studentId) {
-  const rows = schoolYears.forStudent(studentId);
-  if (rows.length === 0) return null;
-  return rows.reduce((a, b) => (b.schoolYear > a.schoolYear ? b : a));
-}
-
-function formatAffiliation(sy) {
-  return sy
-    ? `${sy.schoolYear}학년도 ${sy.grade}학년 ${sy.classNo}반 ${sy.studentNo}번`
-    : "소속 없음";
+/**
+ * 학생 한 명이 곧 한 자리입니다.
+ * 반 문서 안에 들어 있어 학년도·학년·반·번호가 학생 행에 함께 붙어 옵니다.
+ */
+function formatAffiliation(student) {
+  return student.grade == null
+    ? "소속 없음"
+    : `${student.schoolYear}학년도 ${student.grade}학년 ${student.classNo}반 ${student.studentNo}번`;
 }
 
 function toListItem(student) {
-  const sy = latestSchoolYear(student.id);
-  const affiliation = formatAffiliation(sy);
+  const affiliation = formatAffiliation(student);
 
   return {
     id: student.id,
     name: student.name,
     affiliation,
-    schoolYear: sy?.schoolYear ?? null,
-    grade: sy?.grade ?? null,
-    classNo: sy?.classNo ?? null,
-    studentNo: sy?.studentNo ?? null,
+    schoolYear: student.schoolYear ?? null,
+    grade: student.grade ?? null,
+    classNo: student.classNo ?? null,
+    studentNo: student.studentNo ?? null,
     sessionCount: sessions.forStudent(student.id).length,
     isActive: student.isActive,
     memo: student.memo,
-    display: affiliation ? `${affiliation} · ${student.name}` : student.name,
+    display: `${affiliation} · ${student.name}`,
   };
 }
 
@@ -51,17 +47,8 @@ export const studentService = {
       result = result.filter((s) => s.name.toLowerCase().includes(keyword));
     }
 
-    if (grade != null) {
-      result = result.filter((s) =>
-        schoolYears.forStudent(s.id).some((y) => y.grade === grade)
-      );
-    }
-
-    if (classNo != null) {
-      result = result.filter((s) =>
-        schoolYears.forStudent(s.id).some((y) => y.classNo === classNo)
-      );
-    }
+    if (grade != null) result = result.filter((s) => s.grade === grade);
+    if (classNo != null) result = result.filter((s) => s.classNo === classNo);
 
     const items = result.map(toListItem);
 
@@ -78,10 +65,7 @@ export const studentService = {
 
   /** 같은 학년도/학년/반/번호 자리에 이미 있는 학생을 찾습니다. */
   findSeat(key) {
-    const seat = schoolYears.findSeat(key);
-    if (!seat) return null;
-
-    const student = students.find(seat.studentId);
+    const student = students.findSeat(key);
     return student ? { id: student.id, name: student.name } : null;
   },
 
@@ -92,19 +76,18 @@ export const studentService = {
    * @returns {{ status: "matched"|"nameMismatch"|"notFound", student: object|null }}
    */
   matchProfile({ grade, classNo, studentNo, name }) {
-    const seats = schoolYears
+    const seats = students
       .all()
-      .filter((y) => y.grade === grade && y.classNo === classNo && y.studentNo === studentNo)
+      .filter((s) => s.grade === grade && s.classNo === classNo && s.studentNo === studentNo)
       // 여러 학년도에 같은 자리가 있으면 최근 것을 봅니다.
       .sort((a, b) => (b.schoolYear ?? 0) - (a.schoolYear ?? 0));
 
-    for (const seat of seats) {
-      const student = students.find(seat.studentId);
-      if (student && student.name === name) return { status: "matched", student };
-    }
+    const matched = seats.find((student) => student.name === name);
+    if (matched) return { status: "matched", student: matched };
 
-    const student = seats.length ? students.find(seats[0].studentId) : null;
-    return student ? { status: "nameMismatch", student } : { status: "notFound", student: null };
+    return seats.length
+      ? { status: "nameMismatch", student: seats[0] }
+      : { status: "notFound", student: null };
   },
 
   /** 수정 폼에 채워 넣을 데이터. */
@@ -112,42 +95,26 @@ export const studentService = {
     const student = students.find(id);
     if (!student) return null;
 
-    const sy = latestSchoolYear(id);
-
     return {
       id: student.id,
       name: student.name,
       memo: student.memo,
-      schoolYear: sy?.schoolYear ?? new Date().getFullYear(),
-      grade: sy?.grade ?? 0,
-      classNo: sy?.classNo ?? 0,
-      studentNo: sy?.studentNo ?? 0,
+      schoolYear: student.schoolYear ?? new Date().getFullYear(),
+      grade: student.grade ?? 0,
+      classNo: student.classNo ?? 0,
+      studentNo: student.studentNo ?? 0,
     };
   },
 
   add(schoolYear, grade, classNo, studentNo, name, memo, gender = null) {
-    const exists = schoolYears
-      .all()
-      .some(
-        (x) =>
-          x.schoolYear === schoolYear &&
-          x.grade === grade &&
-          x.classNo === classNo &&
-          x.studentNo === studentNo
-      );
-
-    if (exists) {
+    if (students.findSeat({ schoolYear, grade, classNo, studentNo })) {
       return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
     }
 
-    const student = students.add({ name, gender, memo });
-    schoolYears.add({
-      studentId: student.id,
-      schoolYear,
-      grade,
-      classNo,
-      studentNo,
-    });
+    students.create(
+      { schoolYear, grade, classNo, studentNo },
+      students.fields({ name, gender, memo })
+    );
 
     return { ok: true, error: null };
   },
@@ -160,51 +127,34 @@ export const studentService = {
    * @returns {Promise<{ added: number, updated: number, skipped: number }>}
    */
   async importRoster(rows) {
-    const operations = [];
+    const changes = [];
     let added = 0;
     let updated = 0;
 
     for (const row of rows) {
       if (row.action === "add") {
-        // 소속에서 학생을 가리켜야 해서 문서 번호를 미리 받아 둡니다.
-        const studentId = newId("students");
-
-        operations.push({
-          collection: "students",
-          id: studentId,
-          fields: students.fields({ name: row.name, gender: row.gender, memo: row.memo }),
-        });
-
-        operations.push({
-          collection: "schoolYears",
-          id: newId("schoolYears"),
-          fields: {
-            studentId,
+        changes.push({
+          id: newId(),
+          seat: {
             schoolYear: row.schoolYear,
             grade: row.grade,
             classNo: row.classNo,
             studentNo: row.studentNo,
-            status: "재학",
           },
+          fields: students.fields({ name: row.name, gender: row.gender, memo: row.memo }),
         });
-
         added += 1;
       } else if (row.action === "overwrite" && row.existingId) {
-        operations.push({
-          collection: "students",
+        changes.push({
           id: row.existingId,
-          mode: "update",
-          fields: {
-            name: row.name,
-            gender: row.gender,
-            updatedAt: new Date().toISOString(),
-          },
+          fields: { name: row.name, gender: row.gender, updatedAt: new Date().toISOString() },
         });
         updated += 1;
       }
     }
 
-    if (operations.length) await commitAll(operations);
+    // 같은 반 학생은 문서 하나로 묶여 나가므로 900명이라도 쓰기는 반 개수만큼입니다.
+    if (changes.length) await students.save(changes);
 
     return { added, updated, skipped: rows.length - added - updated };
   },
@@ -213,29 +163,12 @@ export const studentService = {
     const student = students.find(id);
     if (!student) return { ok: false, error: "학생을 찾을 수 없습니다." };
 
-    const duplicate = schoolYears
-      .all()
-      .some(
-        (x) =>
-          x.studentId !== id &&
-          x.schoolYear === schoolYear &&
-          x.grade === grade &&
-          x.classNo === classNo &&
-          x.studentNo === studentNo
-      );
-
-    if (duplicate) {
+    const seated = students.findSeat({ schoolYear, grade, classNo, studentNo });
+    if (seated && seated.id !== id) {
       return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
     }
 
-    students.update(id, { name, memo });
-
-    const sy = latestSchoolYear(id);
-    if (!sy) {
-      schoolYears.add({ studentId: id, schoolYear, grade, classNo, studentNo });
-    } else {
-      schoolYears.update(sy.id, { schoolYear, grade, classNo, studentNo });
-    }
+    students.move(id, { schoolYear, grade, classNo, studentNo }, { name, memo });
 
     return { ok: true, error: null };
   },
@@ -255,10 +188,10 @@ export const studentService = {
    * @param {string[]} ids
    */
   removeStudents(ids) {
-    return trashStudents(ids, (studentId) => ({
-      schoolYears: schoolYears.forStudent(studentId).map((row) => row.id),
-      sessions: sessions.forStudent(studentId).map((row) => row.id),
-    }));
+    // 소속은 학생 행 안에 있으므로 함께 옮길 것은 상담 기록뿐입니다.
+    return trashStudents(ids, (studentId) =>
+      sessions.forStudent(studentId).map((row) => row.id)
+    );
   },
 
   getActiveCount() {
@@ -340,16 +273,15 @@ export const counselingService = {
       )
       .map((session) => {
         const student = students.find(session.studentId);
-        const sy = student ? latestSchoolYear(student.id) : null;
 
         return {
           ...session,
           student: student
             ? {
                 name: student.name,
-                grade: sy?.grade ?? null,
-                classNo: sy?.classNo ?? null,
-                studentNo: sy?.studentNo ?? null,
+                grade: student.grade ?? null,
+                classNo: student.classNo ?? null,
+                studentNo: student.studentNo ?? null,
               }
             : null,
         };
