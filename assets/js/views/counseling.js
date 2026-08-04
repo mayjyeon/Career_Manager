@@ -1,11 +1,21 @@
-/** 상담일지 — 학생별 상담 기록 조회 및 추가, 진로상담총괄표 내보내기. */
+/**
+ * 상담일지 — 학생별 상담 기록 조회 및 추가,
+ * 진로상담일지·진로상담총괄표 내보내기.
+ *
+ * 입력 칸은 진로상담일지 서식의 칸을 그대로 따릅니다.
+ */
 import { studentService, counselingService } from "../services.js";
 import { buildCounselingSummary, toFormEntries } from "../counseling-form.js";
+import {
+  JOURNAL_TOPICS,
+  MEETING_TYPES,
+  buildCounselingJournal,
+  toJournalRecords,
+} from "../counseling-journal.js";
 import {
   esc,
   formatDate,
   categoryClass,
-  CATEGORIES,
   emptyState,
   openModal,
   showFormError,
@@ -23,18 +33,28 @@ let selectedId = null;
 /** 상담 한 회기의 기본 소요시간(분). */
 const DEFAULT_DURATION = 30;
 
+/** 목록에 짧게 보여 줄 상담 시간대. */
+function meetingLabel(session) {
+  if (session.meetingType === "class") {
+    return session.period ? `${session.period}교시` : "수업 중";
+  }
+  return MEETING_TYPES.find((type) => type.value === session.meetingType)?.label ?? "";
+}
+
 function sessionCard(session) {
-  const meta = [
-    session.followUpAction ? ["후속 조치", session.followUpAction] : null,
-    session.nextPlan ? ["다음 계획", session.nextPlan] : null,
-  ].filter(Boolean);
+  const when = meetingLabel(session);
+  const topics = session.topics?.length ? session.topics : [session.category];
 
   return `
     <article class="session">
       <div class="session__head">
         <span class="session__date">${esc(formatDate(session.sessionDate))}</span>
         ${session.sessionNo ? `<span class="session__no">${session.sessionNo}회기</span>` : ""}
-        <span class="badge ${categoryClass(session.category)}">${esc(session.category)}</span>
+        ${topics
+          .filter(Boolean)
+          .map((topic) => `<span class="badge ${categoryClass(topic)}">${esc(topic)}</span>`)
+          .join("")}
+        ${when ? `<span class="badge badge--muted">${esc(when)}</span>` : ""}
         ${
           session.durationMinutes
             ? `<span class="badge badge--muted">${session.durationMinutes}분</span>`
@@ -43,18 +63,30 @@ function sessionCard(session) {
       </div>
       <p class="session__content">${esc(session.content)}</p>
       <div class="session__actions">
+        <button class="btn btn--secondary btn--sm" data-journal-session="${session.id}">
+          📄 일지
+        </button>
         <button class="btn btn--secondary btn--sm" data-edit-session="${session.id}">수정</button>
         <button class="btn btn--danger btn--sm" data-remove-session="${session.id}">삭제</button>
       </div>
       ${
-        meta.length
+        session.subject || session.topicOther || session.intervention
           ? `<div class="session__meta">
-               ${meta
-                 .map(
-                   ([label, text]) =>
-                     `<p class="session__meta-row"><b>${label}</b>${esc(text)}</p>`
-                 )
-                 .join("")}
+               ${
+                 session.subject
+                   ? `<p class="session__meta-row"><b>교과명</b>${esc(session.subject)}</p>`
+                   : ""
+               }
+               ${
+                 session.topicOther
+                   ? `<p class="session__meta-row"><b>기타 사유</b>${esc(session.topicOther)}</p>`
+                   : ""
+               }
+               ${
+                 session.intervention
+                   ? `<p class="session__meta-row"><b>소견 및 개입</b>${esc(session.intervention)}</p>`
+                   : ""
+               }
              </div>`
           : ""
       }
@@ -64,6 +96,13 @@ function sessionCard(session) {
 function sessionFormBody(nextNo, session) {
   const date = session ? formatDate(session.sessionDate) : formatDate(new Date());
   const duration = session ? (session.durationMinutes ?? "") : DEFAULT_DURATION;
+  // 새 기록의 기본값은 서식 첫 줄과 같은 '수업 중' 입니다.
+  const meetingType = session?.meetingType ?? "class";
+  const topics = session?.topics?.length
+    ? session.topics
+    : session?.category
+      ? [session.category]
+      : [];
 
   return `
     <div class="form-grid form-grid--3">
@@ -72,11 +111,13 @@ function sessionFormBody(nextNo, session) {
         <input class="input" id="s-date" name="sessionDate" type="date" value="${date}" />
       </div>
       <div class="field">
-        <label class="field__label" for="s-category">상담 분류</label>
-        <select class="select" id="s-category" name="category">
-          ${CATEGORIES.map(
-            (c) =>
-              `<option value="${esc(c)}" ${session?.category === c ? "selected" : ""}>${esc(c)}</option>`
+        <label class="field__label" for="s-meeting">상담 시간대</label>
+        <select class="select" id="s-meeting" name="meetingType">
+          ${MEETING_TYPES.map(
+            (type) =>
+              `<option value="${type.value}" ${type.value === meetingType ? "selected" : ""}>
+                 ${esc(type.label)}
+               </option>`
           ).join("")}
         </select>
       </div>
@@ -86,30 +127,77 @@ function sessionFormBody(nextNo, session) {
                value="${duration}" />
       </div>
     </div>
-    <div class="field">
-      <label class="field__label" for="s-content">상담 내용</label>
-      <textarea class="textarea" id="s-content" name="content" rows="6"
-                placeholder="${nextNo}회기 상담 내용을 입력하세요.">${esc(session?.content ?? "")}</textarea>
+
+    <div class="form-grid" data-when="class">
+      <div class="field">
+        <label class="field__label" for="s-period">교시</label>
+        <input class="input" id="s-period" name="period" inputmode="numeric"
+               placeholder="선택 입력" value="${session?.period ?? ""}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="s-subject">교과명</label>
+        <input class="input" id="s-subject" name="subject"
+               placeholder="선택 입력" value="${esc(session?.subject ?? "")}" />
+      </div>
     </div>
-    <div class="form-grid">
-      <div class="field">
-        <label class="field__label" for="s-follow">후속 조치</label>
-        <textarea class="textarea" id="s-follow" name="followUp" rows="3"
-                  placeholder="선택 입력">${esc(session?.followUpAction ?? "")}</textarea>
+
+    <div class="field">
+      <span class="field__label">상담 주제 <span class="caption">(해당 사항 모두 선택)</span></span>
+      <div class="check-group">
+        ${JOURNAL_TOPICS.map(
+          (topic) => `
+          <label class="check-item">
+            <input type="checkbox" name="topics" value="${esc(topic)}"
+                   ${topics.includes(topic) ? "checked" : ""} />
+            <span>${esc(topic)}</span>
+          </label>`
+        ).join("")}
       </div>
-      <div class="field">
-        <label class="field__label" for="s-next">다음 계획</label>
-        <textarea class="textarea" id="s-next" name="nextPlan" rows="3"
-                  placeholder="선택 입력">${esc(session?.nextPlan ?? "")}</textarea>
-      </div>
+    </div>
+
+    <div class="field" data-when="other">
+      <label class="field__label" for="s-other">기타 사유</label>
+      <input class="input" id="s-other" name="topicOther"
+             value="${esc(session?.topicOther ?? "")}" />
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="s-content">내담자가 진술한 문제와 상황</label>
+      <textarea class="textarea" id="s-content" name="content" rows="6"
+                placeholder="${nextNo}회기 상담에서 학생이 이야기한 내용을 적습니다.">${esc(
+                  session?.content ?? ""
+                )}</textarea>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="s-intervention">상담자 소견 및 개입</label>
+      <textarea class="textarea" id="s-intervention" name="intervention" rows="6"
+                placeholder="선택 입력">${esc(session?.intervention ?? "")}</textarea>
     </div>`;
+}
+
+/** 고른 시간대와 주제에 따라 필요한 칸만 보여 줍니다. */
+function bindConditionalFields(form) {
+  const update = () => {
+    const inClass = form.elements.meetingType.value === "class";
+    const other = [...form.elements.topics].some(
+      (box) => box.checked && box.value === "기타"
+    );
+
+    form.querySelector('[data-when="class"]').hidden = !inClass;
+    form.querySelector('[data-when="other"]').hidden = !other;
+  };
+
+  form.elements.meetingType.addEventListener("change", update);
+  [...form.elements.topics].forEach((box) => box.addEventListener("change", update));
+  update();
 }
 
 /** 상담 기록을 추가하거나 고칩니다. session 이 없으면 추가입니다. */
 function openSessionForm(student, session, onSaved) {
   const nextNo = session?.sessionNo ?? counselingService.getForStudent(student.id).length + 1;
 
-  openModal({
+  const form = openModal({
     title: session ? `${nextNo}회기 상담 기록 수정` : "상담 기록 추가",
     subtitle: `대상: ${student.affiliation} · ${student.name}`,
     body: sessionFormBody(nextNo, session),
@@ -117,15 +205,30 @@ function openSessionForm(student, session, onSaved) {
       { label: "취소", variant: "secondary", value: "cancel" },
       { label: "저장", variant: "primary", value: "submit" },
     ],
-    onAction: (action, form) => {
+    onAction: (action, modalForm) => {
       if (action !== "submit") return;
 
-      clearFormError(form);
-      const get = (name) => form.elements[name].value.trim();
+      clearFormError(modalForm);
+      const get = (name) => modalForm.elements[name].value.trim();
 
       const content = get("content");
       if (!content) {
-        showFormError(form, "상담 내용을 입력해주세요.");
+        showFormError(modalForm, "내담자가 진술한 문제와 상황을 입력해주세요.");
+        return false;
+      }
+
+      const topics = [...modalForm.elements.topics]
+        .filter((box) => box.checked)
+        .map((box) => box.value);
+
+      if (topics.length === 0) {
+        showFormError(modalForm, "상담 주제를 하나 이상 선택해주세요.");
+        return false;
+      }
+
+      const topicOther = get("topicOther");
+      if (topics.includes("기타") && !topicOther) {
+        showFormError(modalForm, "상담 주제로 ‘기타’를 골랐으면 사유를 적어주세요.");
         return false;
       }
 
@@ -133,40 +236,45 @@ function openSessionForm(student, session, onSaved) {
       const duration = rawDuration ? Number.parseInt(rawDuration, 10) : null;
 
       if (rawDuration && (Number.isNaN(duration) || duration <= 0)) {
-        showFormError(form, "소요시간을 분 단위 숫자로 입력해주세요.");
+        showFormError(modalForm, "소요시간을 분 단위 숫자로 입력해주세요.");
+        return false;
+      }
+
+      const meetingType = get("meetingType");
+      const rawPeriod = get("period");
+      const period = rawPeriod ? Number.parseInt(rawPeriod, 10) : null;
+
+      if (meetingType === "class" && rawPeriod && (Number.isNaN(period) || period <= 0)) {
+        showFormError(modalForm, "교시를 숫자로 입력해주세요.");
         return false;
       }
 
       const raw = get("sessionDate");
       const date = raw ? new Date(`${raw}T00:00:00`) : new Date();
 
+      const record = {
+        date: date.toISOString(),
+        topics,
+        topicOther: topics.includes("기타") ? topicOther : null,
+        meetingType,
+        period,
+        subject: get("subject"),
+        durationMinutes: duration,
+        content,
+        intervention: get("intervention"),
+      };
+
       if (session) {
-        const result = counselingService.update(session.id, {
-          date: date.toISOString(),
-          category: get("category"),
-          content,
-          followUp: get("followUp") || null,
-          nextPlan: get("nextPlan") || null,
-          durationMinutes: duration,
-        });
+        const result = counselingService.update(session.id, record);
 
         if (!result.ok) {
-          showFormError(form, result.error);
+          showFormError(modalForm, result.error);
           return false;
         }
 
         toast(`${nextNo}회기 상담 기록을 수정했습니다.`, "success");
       } else {
-        const no = counselingService.add(
-          student.id,
-          date.toISOString(),
-          get("category"),
-          content,
-          get("followUp") || null,
-          get("nextPlan") || null,
-          duration
-        );
-
+        const no = counselingService.add(student.id, record);
         toast(`${no}회기 상담 기록을 저장했습니다.`, "success");
       }
 
@@ -174,6 +282,8 @@ function openSessionForm(student, session, onSaved) {
       return true;
     },
   });
+
+  bindConditionalFields(form);
 }
 
 /* =========================================================
@@ -272,6 +382,195 @@ function exportFormBody() {
     <p class="caption" style="margin-top:4px">
       한글 문서(.hwpx)로 저장됩니다. 한글에서 열어 ‘다른 이름으로 저장’하면 .hwp 로 바꿀 수 있습니다.
     </p>`;
+}
+
+/* =========================================================
+   진로상담일지 내보내기
+   ========================================================= */
+const JOURNAL_KEY = "career-manager.journal-form";
+
+/** 원본 서식에 인쇄되어 있던 값이 기본값입니다. */
+const DEFAULT_JOURNAL = {
+  school: "대전반석고",
+  staff: "진로진학부장 홍지연",
+  extension: "7895",
+};
+
+function loadJournalSettings() {
+  try {
+    return { ...DEFAULT_JOURNAL, ...JSON.parse(localStorage.getItem(JOURNAL_KEY) ?? "{}") };
+  } catch {
+    return { ...DEFAULT_JOURNAL };
+  }
+}
+
+function saveJournalSettings(settings) {
+  try {
+    localStorage.setItem(JOURNAL_KEY, JSON.stringify(settings));
+  } catch {
+    /* 저장할 수 없으면 이번 세션에만 적용됩니다. */
+  }
+}
+
+/** 서식의 내담자 정보 칸에 들어갈 값. */
+const journalStudent = (student) => ({
+  name: student.name,
+  grade: student.grade,
+  classNo: student.classNo,
+  studentNo: student.studentNo,
+});
+
+/** 상담일지를 한글 문서로 저장합니다. 상담 한 건이 한 쪽입니다. */
+async function saveJournal(sessions, { year, term, ...settings }) {
+  const blob = await buildCounselingJournal({
+    ...settings,
+    year,
+    term,
+    records: toJournalRecords(sessions),
+  });
+
+  downloadBlob(blob, `진로상담일지_${year}학년도_${term}학기.hwpx`);
+}
+
+/** 상담 한 건을 바로 내보냅니다. 학년도·학기는 상담 날짜에서 정합니다. */
+async function exportOneJournal(session, student) {
+  const { year, term } = currentTerm(new Date(session.sessionDate));
+
+  try {
+    await saveJournal([{ ...session, student: journalStudent(student) }], {
+      ...loadJournalSettings(),
+      year,
+      term,
+    });
+    toast("상담일지를 내보냈습니다.", "success");
+  } catch (error) {
+    toast(error?.message ?? "문서를 만들지 못했습니다.", "error");
+  }
+}
+
+function journalFormBody(selected) {
+  const term = currentTerm();
+  const settings = loadJournalSettings();
+
+  return `
+    ${
+      selected
+        ? `<div class="field">
+             <label class="field__label" for="j-scope">대상</label>
+             <select class="select" id="j-scope" name="scope">
+               <option value="student">${esc(selected.name)} 학생만</option>
+               <option value="all">모든 학생</option>
+             </select>
+           </div>`
+        : ""
+    }
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="j-from">시작일</label>
+        <input class="input" id="j-from" name="from" type="date" value="${term.from}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="j-to">종료일</label>
+        <input class="input" id="j-to" name="to" type="date" value="${term.to}" />
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="field">
+        <label class="field__label" for="j-year">학년도</label>
+        <input class="input" id="j-year" name="year" inputmode="numeric" value="${term.year}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="j-term">학기</label>
+        <select class="select" id="j-term" name="term">
+          <option value="1" ${term.term === 1 ? "selected" : ""}>1학기</option>
+          <option value="2" ${term.term === 2 ? "selected" : ""}>2학기</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid form-grid--3">
+      <div class="field">
+        <label class="field__label" for="j-school">학교명</label>
+        <input class="input" id="j-school" name="school" value="${esc(settings.school)}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="j-staff">담당자</label>
+        <input class="input" id="j-staff" name="staff" value="${esc(settings.staff)}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="j-ext">내선번호</label>
+        <input class="input" id="j-ext" name="extension" value="${esc(settings.extension)}" />
+      </div>
+    </div>
+    <p class="caption" style="margin-top:4px">
+      상담 한 건이 한 쪽입니다. 한글 문서(.hwpx)로 저장되며, 한글에서 열어 그대로 인쇄하거나
+      ‘다른 이름으로 저장’으로 .hwp·PDF 로 바꿀 수 있습니다.
+    </p>`;
+}
+
+function openJournalForm(selected) {
+  openModal({
+    title: "진로상담일지 내보내기",
+    subtitle: "기간 안의 상담 기록을 서식에 채워 한글 문서로 저장합니다.",
+    body: journalFormBody(selected),
+    actions: [
+      { label: "취소", variant: "secondary", value: "cancel" },
+      { label: "내보내기", variant: "primary", value: "submit" },
+    ],
+    onAction: async (action, form) => {
+      if (action !== "submit") return;
+
+      clearFormError(form);
+      const get = (name) => form.elements[name]?.value.trim() ?? "";
+
+      const from = get("from");
+      const to = get("to");
+
+      if (!from || !to) {
+        showFormError(form, "시작일과 종료일을 입력해주세요.");
+        return false;
+      }
+      if (from > to) {
+        showFormError(form, "종료일이 시작일보다 빠릅니다.");
+        return false;
+      }
+
+      const year = Number.parseInt(get("year"), 10);
+      if (Number.isNaN(year)) {
+        showFormError(form, "학년도를 숫자로 입력해주세요.");
+        return false;
+      }
+
+      const onlyStudent = selected && get("scope") !== "all";
+      const sessions = counselingService
+        .getInRange(from, to)
+        .filter((session) => !onlyStudent || session.studentId === selected.id);
+
+      if (sessions.length === 0) {
+        showFormError(form, "그 기간에는 상담 기록이 없습니다.");
+        return false;
+      }
+
+      const settings = {
+        school: get("school"),
+        staff: get("staff"),
+        extension: get("extension"),
+      };
+      saveJournalSettings(settings);
+
+      try {
+        await saveJournal(sessions, {
+          ...settings,
+          year,
+          term: Number.parseInt(get("term"), 10),
+        });
+        toast(`상담일지 ${sessions.length}쪽을 내보냈습니다.`, "success");
+      } catch (error) {
+        toast(error?.message ?? "문서를 만들지 못했습니다.", "error");
+      }
+
+      return true;
+    },
+  });
 }
 
 function openExportForm() {
@@ -391,6 +690,7 @@ export function render(container, { navigate }) {
         <p class="page-subtitle">학생별 상담 기록을 남기고 확인합니다.</p>
       </div>
       <div class="page-head__actions">
+        <button class="btn btn--secondary" data-journal>📄 상담일지 내보내기</button>
         <button class="btn btn--secondary" data-export>📄 총괄표 내보내기</button>
       </div>
     </div>
@@ -446,6 +746,17 @@ export function render(container, { navigate }) {
   });
 
   container.querySelector("[data-export]")?.addEventListener("click", () => openExportForm());
+
+  container
+    .querySelector("[data-journal]")
+    ?.addEventListener("click", () => openJournalForm(selected));
+
+  container.querySelectorAll("[data-journal-session]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const record = sessions.find((s) => s.id === btn.dataset.journalSession);
+      if (selected && record) exportOneJournal(record, selected);
+    })
+  );
 
   container.querySelectorAll("[data-add]").forEach((btn) =>
     btn.addEventListener("click", () => {

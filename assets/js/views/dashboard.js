@@ -13,6 +13,8 @@ export const meta = { id: "dashboard", icon: "🏠", title: "대시보드" };
 
 function recentItem(session) {
   const name = session.student?.name ?? "(삭제된 학생)";
+  // 상담 주제는 여러 개일 수 있어 목록에서는 첫 번째만 보여 줍니다.
+  const topic = session.topics?.[0] ?? session.category;
 
   return `
     <li class="recent__item">
@@ -20,7 +22,7 @@ function recentItem(session) {
       <div class="recent__body">
         <div class="recent__head">
           <span class="recent__name">${esc(name)}</span>
-          <span class="badge ${categoryClass(session.category)}">${esc(session.category)}</span>
+          ${topic ? `<span class="badge ${categoryClass(topic)}">${esc(topic)}</span>` : ""}
           <span class="recent__date" title="${esc(formatDate(session.sessionDate))}">
             ${esc(relativeDate(session.sessionDate))}
           </span>

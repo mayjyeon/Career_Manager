@@ -41,20 +41,21 @@ export function initials(name) {
   return /[가-힣]/.test(trimmed) ? trimmed.slice(-2) : trimmed.slice(0, 1).toUpperCase();
 }
 
-/** 상담 분류에 따라 배지 색을 정합니다. */
-export function categoryClass(category) {
-  switch (category) {
+/**
+ * 상담 주제에 따라 배지 색을 정합니다.
+ * 진로상담총괄표에 칸이 있는 진로·진학만 색을 나누고,
+ * 선택교과·학업·기타는 총괄표에서 한데 묶이므로 같은 색을 씁니다.
+ */
+export function categoryClass(topic) {
+  switch (topic) {
+    case "진로":
+      return "";
     case "진학":
       return "badge--success";
-    case "기타":
-      return "badge--muted";
     default:
-      return "";
+      return "badge--muted";
   }
 }
-
-/** 상담 분류 — 진로상담총괄표 서식과 같은 3종입니다. */
-export const CATEGORIES = ["진로", "진학", "기타"];
 
 /** 파일을 내려받습니다. */
 export function downloadBlob(blob, filename) {

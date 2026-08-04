@@ -36,6 +36,12 @@ export const ALIGN = {
   right: 3,
 };
 
+/**
+ * 문단 유형은 정렬마다 두 벌씩 있습니다.
+ * 뒤쪽 네 개는 앞에서 쪽을 나누는 것만 다릅니다(0~3 → 4~7).
+ */
+const PAGE_BREAK_OFFSET = 4;
+
 /** 표 테두리 굵기 기본값 (mm). */
 const DEFAULT_LINES = { outer: 0.4, inner: 0.12, boundary: 0.5 };
 
@@ -124,9 +130,15 @@ const BODY_FONT = font(10);
 /* =========================================================
    문단 · 표
    ========================================================= */
-/** 문단 하나를 만듭니다. 줄바꿈이 있으면 줄을 나눕니다. */
-export function paragraph(content, { align = ALIGN.justify, char = BODY_FONT } = {}) {
-  return { type: "paragraph", lines: toLines(content), align, char };
+/**
+ * 문단 하나를 만듭니다. 줄바꿈이 있으면 줄을 나눕니다.
+ * pageBreak 을 켜면 이 문단부터 새 쪽에서 시작합니다.
+ */
+export function paragraph(
+  content,
+  { align = ALIGN.justify, char = BODY_FONT, pageBreak = false } = {}
+) {
+  return { type: "paragraph", lines: toLines(content), align, char, pageBreak };
 }
 
 /**
@@ -135,8 +147,9 @@ export function paragraph(content, { align = ALIGN.justify, char = BODY_FONT } =
  * @param {object} options
  * @param {number[]} options.widths 열 너비 (HWPUNIT)
  * @param {Array<{ height?: number, doubleBottom?: boolean, cells: Array<object> }>} options.rows
- *        각 칸은 { text, colSpan, rowSpan, align, char, fill, slash } 입니다.
+ *        각 칸은 { text, colSpan, rowSpan, align, vertAlign, char, fill, slash } 입니다.
  *        fill 은 배경색, slash 는 칸을 가로지르는 사선(빈칸 표시)입니다.
+ *        vertAlign 은 "TOP"·"CENTER"·"BOTTOM" 으로, 기본값은 "CENTER" 입니다.
  * @param {object} [options.lines] 테두리 굵기 { outer, inner, boundary } (mm)
  */
 export function table({ widths, rows, lines }) {
@@ -227,11 +240,12 @@ function renderRuns(line, defaultChar, chars) {
     .join("");
 }
 
-function renderParagraph(ctx, { lines, align, char }, inner = "") {
+function renderParagraph(ctx, { lines, align, char, pageBreak }, inner = "") {
   // 한 문단 안의 여러 줄은 각각 run 으로 넣습니다(강제 줄바꿈).
   const body = inner || lines.map((line) => renderRuns(line, char, ctx.chars)).join("");
+  const paraPrId = align + (pageBreak ? PAGE_BREAK_OFFSET : 0);
   return (
-    `<hp:p id="${ctx.nextId()}" paraPrIDRef="${align}" styleIDRef="0"` +
+    `<hp:p id="${ctx.nextId()}" paraPrIDRef="${paraPrId}" styleIDRef="0"` +
     ` pageBreak="0" columnBreak="0" merged="0">${body}</hp:p>`
   );
 }
@@ -248,7 +262,7 @@ function renderCell(ctx, cell, layout, block) {
   return (
     `<hp:tc name="" header="${cell.header ? 1 : 0}" hasMargin="0" protect="0"` +
     ` editable="0" dirty="0" borderFillIDRef="${borderId}">` +
-    `<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER"` +
+    `<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="${cell.vertAlign ?? "CENTER"}"` +
     ` linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0"` +
     ` hasTextRef="0" hasNumRef="0">${paragraphs}</hp:subList>` +
     `<hp:cellAddr colAddr="${cell.colIndex}" rowAddr="${cell.rowIndex}"/>` +
@@ -394,7 +408,7 @@ function charPr(id, { size, bold, color }) {
   );
 }
 
-function paraPr(id, horizontal) {
+function paraPr(id, horizontal, pageBreakBefore = 0) {
   const margin =
     `<hh:margin>` +
     `<hc:intent value="0" unit="HWPUNIT"/>` +
@@ -411,7 +425,7 @@ function paraPr(id, horizontal) {
     `<hh:align horizontal="${horizontal}" vertical="BASELINE"/>` +
     `<hh:heading type="NONE" idRef="0" level="0"/>` +
     `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0"` +
-    ` keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>` +
+    ` keepWithNext="0" keepLines="0" pageBreakBefore="${pageBreakBefore}" lineWrap="BREAK"/>` +
     `<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>` +
     `<hc:switch>` +
     `<hc:case hc:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${margin}</hc:case>` +
@@ -477,11 +491,14 @@ function buildHeader(ctx, fontName) {
     ctx.chars.items.map((spec, index) => charPr(index, spec)).join("") +
     `</hh:charProperties>`;
 
-  // ALIGN 상수와 순서를 맞춥니다.
+  // ALIGN 상수와 순서를 맞춥니다. 뒤쪽 네 개는 쪽 나눔이 붙은 같은 정렬입니다.
   const aligns = ["JUSTIFY", "CENTER", "LEFT", "RIGHT"];
   const paraProperties =
-    `<hh:paraProperties itemCnt="${aligns.length}">` +
+    `<hh:paraProperties itemCnt="${aligns.length * 2}">` +
     aligns.map((horizontal, index) => paraPr(index, horizontal)).join("") +
+    aligns
+      .map((horizontal, index) => paraPr(index + PAGE_BREAK_OFFSET, horizontal, 1))
+      .join("") +
     `</hh:paraProperties>`;
 
   const numbering =

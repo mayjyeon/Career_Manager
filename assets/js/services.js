@@ -5,6 +5,7 @@
  */
 import { students, sessions, newId } from "./store.js";
 import { trashSession, trashStudents } from "./trash.js";
+import { JOURNAL_TOPICS, topicsToCategory } from "./counseling-journal.js";
 
 /**
  * 학생 한 명이 곧 한 자리입니다.
@@ -202,6 +203,39 @@ export const studentService = {
 /* =========================================================
    CounselingService
    ========================================================= */
+/**
+ * 화면에서 받은 상담 내용을 저장할 모양으로 바꿉니다.
+ *
+ * category 는 진로상담총괄표와 통계 화면이 쓰는 3종 분류로,
+ * 고른 상담 주제에서 자동으로 정합니다.
+ */
+function toSessionFields({
+  topics,
+  topicOther,
+  meetingType,
+  period,
+  subject,
+  durationMinutes,
+  content,
+  intervention,
+}) {
+  const chosen = (topics ?? []).filter((topic) => JOURNAL_TOPICS.includes(topic));
+  const inClass = meetingType === "class";
+
+  return {
+    category: topicsToCategory(chosen),
+    topics: chosen,
+    topicOther: topicOther || null,
+    meetingType: meetingType ?? null,
+    // 교시와 교과명은 수업 중 상담에만 있습니다.
+    period: inClass ? (period ?? null) : null,
+    subject: inClass ? (subject || null) : null,
+    durationMinutes: durationMinutes ?? null,
+    content,
+    intervention: intervention || null,
+  };
+}
+
 export const counselingService = {
   /** 학생 한 명의 상담 기록을 최신순으로 조회합니다. */
   getForStudent(studentId) {
@@ -232,18 +266,22 @@ export const counselingService = {
       }));
   },
 
-  add(studentId, date, category, content, followUp, nextPlan, durationMinutes = null) {
+  /**
+   * 상담 기록을 남깁니다. 필드는 진로상담일지 서식의 칸과 같습니다.
+   *
+   * @param {string} studentId
+   * @param {object} record { date, topics, topicOther, meetingType, period, subject,
+   *                          durationMinutes, content, intervention }
+   * @returns {number} 회기 번호
+   */
+  add(studentId, record) {
     const nextNo = sessions.forStudent(studentId).length + 1;
 
     sessions.add({
       studentId,
-      sessionDate: date,
+      sessionDate: record.date,
       sessionNo: nextNo,
-      category: category && category.trim() ? category.trim() : "진로",
-      durationMinutes,
-      content,
-      followUpAction: followUp,
-      nextPlan,
+      ...toSessionFields(record),
     });
 
     return nextNo;
@@ -289,17 +327,16 @@ export const counselingService = {
   },
 
   /** 상담 기록을 고칩니다. */
-  update(id, { date, category, content, followUp, nextPlan, durationMinutes }) {
+  update(id, record) {
     const session = sessions.find(id);
     if (!session) return { ok: false, error: "상담 기록을 찾을 수 없습니다." };
 
     sessions.update(id, {
-      sessionDate: date,
-      category: category && category.trim() ? category.trim() : "진로",
-      durationMinutes,
-      content,
-      followUpAction: followUp,
-      nextPlan,
+      sessionDate: record.date,
+      ...toSessionFields(record),
+      // 옛 형식으로 저장된 칸은 새 칸으로 옮겼으니 비웁니다.
+      followUpAction: null,
+      nextPlan: null,
     });
 
     return { ok: true, error: null };
