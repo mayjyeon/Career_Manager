@@ -5,8 +5,8 @@
  * 모두 이 파일을 거칩니다. 정렬 순서와 학년도 규칙이 화면마다 달라지지 않도록
  * 여기 한 곳에만 적어 둡니다.
  */
-import { students, sessions, newId } from "./store.js";
-import { trashSession, trashStudents } from "./trash.js";
+import { students, sessions, newId, teacherPortfolios } from "./store.js";
+import { trashPortfolio, trashSession, trashStudents } from "./trash.js";
 import { JOURNAL_TOPICS, topicsToCategory } from "./counseling-docs.js";
 
 /* =========================================================
@@ -91,34 +91,38 @@ const seatOf = ({ schoolYear, grade, classNo, studentNo }) => ({
   studentNo,
 });
 
+/** 명부에 보이는 차례: 최신 학년도 내림차순 → 학년/반/번호 오름차순 → 이름 순. */
+export const bySeat = (a, b) =>
+  (b.schoolYear ?? 0) - (a.schoolYear ?? 0) ||
+  (a.grade ?? 0) - (b.grade ?? 0) ||
+  (a.classNo ?? 0) - (b.classNo ?? 0) ||
+  (a.studentNo ?? 0) - (b.studentNo ?? 0) ||
+  String(a.name ?? "").localeCompare(String(b.name ?? ""), "ko");
+
 export const studentService = {
   /**
-   * 활성 학생 목록을 조건에 맞게 조회합니다.
-   * @param {{ name?: string, grade?: number|null, classNo?: number|null }} [filter]
+   * 학생 목록을 조건에 맞게 조회합니다.
+   *
+   * 비활성화한 학생은 기본으로 빠집니다. 다만 그 학생의 상담 기록은 남아 있으므로,
+   * 기록을 보거나 정리해야 하는 화면(상담일지)은 includeInactive 로 함께 부릅니다.
+   *
+   * @param {{ name?: string, grade?: number|null, classNo?: number|null,
+   *           includeInactive?: boolean }} [filter]
    */
-  getStudents({ name = "", grade = null, classNo = null } = {}) {
+  getStudents({ name = "", grade = null, classNo = null, includeInactive = false } = {}) {
     const keyword = name.trim().toLowerCase();
 
-    const items = students
+    return students
       .all()
       .filter(
         (s) =>
-          s.isActive &&
+          (s.isActive || includeInactive) &&
           (!keyword || s.name.toLowerCase().includes(keyword)) &&
           (grade == null || s.grade === grade) &&
           (classNo == null || s.classNo === classNo)
       )
-      .map(toListItem);
-
-    // 최신 학년도 내림차순 → 학년/반/번호 오름차순 → 이름 순
-    return items.sort(
-      (a, b) =>
-        (b.schoolYear ?? 0) - (a.schoolYear ?? 0) ||
-        (a.grade ?? 0) - (b.grade ?? 0) ||
-        (a.classNo ?? 0) - (b.classNo ?? 0) ||
-        (a.studentNo ?? 0) - (b.studentNo ?? 0) ||
-        a.name.localeCompare(b.name, "ko")
-    );
+      .map(toListItem)
+      .sort(bySeat);
   },
 
   /** 통계 화면처럼 자리 정보가 필요한 곳에서 쓰는 원본 목록. */
@@ -130,6 +134,23 @@ export const studentService = {
   findSeat(seat) {
     const student = students.findSeat(seat);
     return student ? { id: student.id, name: student.name } : null;
+  },
+
+  /** 그 자리의 학생을 목록 항목 모양으로 찾습니다(포트폴리오 일괄 등록에 씁니다). */
+  findSeatItem(seat) {
+    const student = students.findSeat(seat);
+    return student ? toListItem(student) : null;
+  },
+
+  /** 명부에 있는 학년도. 최근 것부터입니다. */
+  getSchoolYears() {
+    const years = new Set(
+      students
+        .all()
+        .map((s) => s.schoolYear)
+        .filter((year) => year != null)
+    );
+    return [...years].sort((a, b) => b - a);
   },
 
   /**
@@ -256,15 +277,13 @@ export const studentService = {
 
   /**
    * 학생을 지웁니다(자퇴·졸업 등).
-   * 소속과 상담 기록도 함께 휴지통으로 들어가고, 30일 뒤 완전히 사라집니다.
+   * 상담 기록과 선생님이 등록한 포트폴리오도 함께 휴지통으로 들어가고,
+   * 30일 뒤 완전히 사라집니다.
    *
    * @param {string[]} ids
    */
   removeStudents(ids) {
-    // 소속은 학생 행 안에 있으므로 함께 옮길 것은 상담 기록뿐입니다.
-    return trashStudents(ids, (studentId) =>
-      sessions.forStudent(studentId).map((row) => row.id)
-    );
+    return trashStudents(ids);
   },
 
   getActiveCount() {
@@ -328,9 +347,31 @@ export const counselingService = {
       .sort((a, b) => byDate(b, a) || (b.sessionNo ?? 0) - (a.sessionNo ?? 0));
   },
 
-  /** 통계 화면이 쓰는 전체 목록. */
+  /** 저장된 상담 기록 전부. 주인이 사라진 것도 들어 있습니다. */
   getAll() {
     return sessions.all();
+  },
+
+  /**
+   * 학생이 남아 있는 상담 기록만. 통계는 이것으로 셉니다.
+   *
+   * 학생을 완전히 지웠는데 기록이 남으면 건수·시간·상담 학생 수가 부풀려집니다.
+   */
+  getLinked() {
+    return sessions.all().filter((session) => students.find(session.studentId));
+  },
+
+  /**
+   * 주인(학생)이 없는 상담 기록.
+   *
+   * 옛 형식으로 옮기던 중이거나 학생만 따로 지웠을 때 남습니다.
+   * 상담일지 화면에서 골라 지울 수 있게 여기서 모아 줍니다.
+   */
+  getOrphans() {
+    return sessions
+      .all()
+      .filter((session) => !students.find(session.studentId))
+      .sort(newestFirst);
   },
 
   /** 최근 상담 기록 count 건을 학생 정보와 함께 조회합니다. */
@@ -403,12 +444,137 @@ export const counselingService = {
     return { ok: true, error: null };
   },
 
-  /** 상담 기록을 휴지통으로 보냅니다. */
-  remove(id) {
-    return trashSession(id);
+  /** 상담 기록을 휴지통으로 보냅니다. 여러 건을 한 번에 보낼 수 있습니다. */
+  remove(ids) {
+    return trashSession(ids);
   },
 
   getTotalCount() {
     return sessions.all().length;
+  },
+};
+
+/* =========================================================
+   PortfolioService — 선생님이 등록한 포트폴리오
+
+   학생이 스스로 올린 포트폴리오는 board.js 가 맡습니다.
+   여기 있는 것은 선생님만 보는 자료로, 명렬표의 학생에 붙습니다.
+   ========================================================= */
+/** 5자리 학번(학년 1 + 반 2 + 번호 2)을 자리로 풀어 줍니다. 예: 10203 → 1학년 2반 3번 */
+export function parseStudentNumber(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length !== 5) return null;
+
+  const grade = Number.parseInt(digits.slice(0, 1), 10);
+  const classNo = Number.parseInt(digits.slice(1, 3), 10);
+  const studentNo = Number.parseInt(digits.slice(3), 10);
+
+  if (!grade || !classNo || !studentNo) return null;
+  return { grade, classNo, studentNo };
+}
+
+/** 자리를 5자리 학번으로 되돌립니다. */
+export const formatStudentNumber = ({ grade, classNo, studentNo }) =>
+  grade == null || classNo == null || studentNo == null
+    ? ""
+    : `${grade}${String(classNo).padStart(2, "0")}${String(studentNo).padStart(2, "0")}`;
+
+export const portfolioService = {
+  /**
+   * 선생님이 등록한 포트폴리오를 학생별로 묶어 돌려줍니다.
+   * 학번 순(학년도 최신 → 학년 → 반 → 번호)으로 정렬합니다.
+   *
+   * @param {{ name?: string, grade?: number|null, classNo?: number|null, keyword?: string }} [filter]
+   * @returns {Array<{ student: object|null, seat: object, entries: Array<object> }>}
+   */
+  getGroups({ name = "", grade = null, classNo = null, keyword = "" } = {}) {
+    const nameKeyword = name.trim().toLowerCase();
+    const textKeyword = keyword.trim().toLowerCase();
+    const groups = new Map();
+
+    for (const entry of teacherPortfolios.all()) {
+      const group = groups.get(entry.studentId) ?? {
+        studentId: entry.studentId,
+        student: students.find(entry.studentId),
+        // 학생을 지웠어도 항목 안에 남은 자리 정보로 보여 줍니다.
+        seat: {
+          schoolYear: entry.schoolYear,
+          grade: entry.grade,
+          classNo: entry.classNo,
+          studentNo: entry.studentNo,
+        },
+        name: entry.studentName ?? "",
+        entries: [],
+      };
+
+      group.entries.push(entry);
+      groups.set(entry.studentId, group);
+    }
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        name: group.student?.name ?? group.name,
+        entries: group.entries.filter(
+          (entry) =>
+            !textKeyword ||
+            `${entry.title ?? ""} ${entry.body ?? ""}`.toLowerCase().includes(textKeyword)
+        ),
+      }))
+      .filter(
+        (group) =>
+          group.entries.length > 0 &&
+          (!nameKeyword || group.name.toLowerCase().includes(nameKeyword)) &&
+          (grade == null || group.seat.grade === grade) &&
+          (classNo == null || group.seat.classNo === classNo)
+      )
+      .sort((a, b) => bySeat({ ...a.seat, name: a.name }, { ...b.seat, name: b.name }));
+  },
+
+  find(id) {
+    return teacherPortfolios.find(id);
+  },
+
+  getTotalCount() {
+    return teacherPortfolios.all().length;
+  },
+
+  /**
+   * 포트폴리오를 여러 건 등록합니다.
+   * 같은 반은 문서 하나로 묶여 나가므로 한 학년 전체를 올려도 쓰기는 반 개수만큼입니다.
+   *
+   * @param {Array<{ student: object, title: string, body: string, source?: string }>} rows
+   * @returns {Promise<number>} 등록한 건수
+   */
+  async addMany(rows) {
+    const changes = rows.map(({ student, title, body, source }) => ({
+      id: newId(),
+      seat: seatOf(student),
+      fields: teacherPortfolios.fields({
+        studentId: student.id,
+        studentName: student.name,
+        title,
+        body,
+        source: source ?? null,
+      }),
+    }));
+
+    if (changes.length) await teacherPortfolios.save(changes);
+    return changes.length;
+  },
+
+  /** 포트폴리오 한 건의 제목과 내용을 고칩니다. */
+  update(id, { title, body }) {
+    if (!teacherPortfolios.find(id)) {
+      return { ok: false, error: "포트폴리오를 찾을 수 없습니다." };
+    }
+
+    teacherPortfolios.update(id, { title, body });
+    return { ok: true, error: null };
+  },
+
+  /** 포트폴리오를 휴지통으로 보냅니다. 여러 건을 한 번에 보낼 수 있습니다. */
+  remove(ids) {
+    return trashPortfolio(ids);
   },
 };

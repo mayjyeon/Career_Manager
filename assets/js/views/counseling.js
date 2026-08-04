@@ -16,6 +16,16 @@ import {
 import { loadSettings, saveSettings } from "../local.js";
 import { TRASH_DAYS } from "../trash.js";
 import {
+  FIELDS,
+  STUDENT_FIELDS,
+  bindSearchBar,
+  createFilter,
+  hasFilter,
+  matches,
+  numberOrNull,
+  searchBar,
+} from "./search-bar.js";
+import {
   esc,
   formatDate,
   categoryClass,
@@ -31,11 +41,33 @@ import {
 
 export const meta = { id: "counseling", icon: "📝", title: "상담일지" };
 
-// 화면을 다시 열어도 선택한 학생을 기억합니다.
+// 화면을 다시 열어도 선택한 학생과 검색 조건을 기억합니다.
 let selectedId = null;
+
+/** 학생을 고를 때 쓰는 조건. 학생 관리 탭과 같은 칸입니다. */
+const studentFilter = createFilter(STUDENT_FIELDS);
+
+/** 고른 학생의 상담 기록 안에서 찾을 때 쓰는 조건. */
+const RECORD_FIELDS = [
+  { ...FIELDS.keyword, label: "기록 검색", placeholder: "날짜·주제·내용으로 검색" },
+];
+const recordFilter = createFilter(RECORD_FIELDS);
 
 /** 상담 한 회기의 기본 소요시간(분). */
 const DEFAULT_DURATION = 30;
+
+/** 검색어가 상담 기록 어딘가에 들어 있는지. */
+const sessionMatches = (session, keyword) =>
+  matches(
+    keyword,
+    formatDate(session.sessionDate),
+    session.sessionNo ? `${session.sessionNo}회기` : "",
+    (session.topics ?? []).join(" "),
+    session.topicOther,
+    session.subject,
+    session.content,
+    session.intervention
+  );
 
 /* =========================================================
    상담 기록 보여주기
@@ -580,21 +612,139 @@ function openSummaryExport() {
 }
 
 /* =========================================================
+   주인 없는 상담 기록 정리
+
+   학생을 지웠는데 기록만 남는 경우가 있습니다(옛 형식에서 옮겨 온 자료,
+   학생 문서만 따로 지운 경우 등). 이런 기록은 학생 목록에 없어 화면에서
+   고를 수 없으면서 통계에는 계속 잡히므로 여기서 모아 지웁니다.
+   ========================================================= */
+function orphanRow(session, index) {
+  const topics = (session.topics?.length ? session.topics : [session.category]).filter(Boolean);
+
+  return `
+    <tr>
+      <td class="check">
+        <input type="checkbox" data-orphan="${session.id}"
+               aria-label="${esc(formatDate(session.sessionDate))} 기록 선택" />
+      </td>
+      <td class="nowrap">${esc(formatDate(session.sessionDate))}</td>
+      <td class="nowrap">${session.sessionNo ? `${session.sessionNo}회기` : "—"}</td>
+      <td>${topics.map((topic) => `<span class="badge badge--muted">${esc(topic)}</span>`).join(" ")}</td>
+      <td>${esc((session.content ?? "").slice(0, 60))}</td>
+    </tr>`;
+}
+
+function orphanSection(orphans) {
+  if (orphans.length === 0) return "";
+
+  return `
+    <section class="card card--quiet" style="margin-top:16px">
+      <div class="card__head">
+        <h2 class="section-title">주인 없는 상담 기록 ${orphans.length}건</h2>
+        <span class="caption">통계에서는 이미 빠져 있습니다</span>
+      </div>
+      <p class="muted" style="margin:8px 0 12px">
+        학생이 지워졌는데 기록만 남아 있습니다. 학생 목록에 없어 평소에는 고를 수 없으니
+        여기서 정리해주세요. 휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.
+      </p>
+      <div class="import-bulk" style="margin-bottom:12px">
+        <button class="btn btn--danger btn--sm" type="button" data-orphan-remove>선택 삭제</button>
+        <button class="btn btn--secondary btn--sm" type="button" data-orphan-all>모두 삭제</button>
+      </div>
+      <div class="table-wrap table-wrap--scroll">
+        <table class="table table--compact">
+          <thead>
+            <tr>
+              <th class="check"><input type="checkbox" data-orphan-select-all aria-label="모두 선택" /></th>
+              <th>날짜</th><th>회기</th><th>주제</th><th>내용</th>
+            </tr>
+          </thead>
+          <tbody>${orphans.map(orphanRow).join("")}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function bindOrphanSection(container, orphans, rerender) {
+  const boxes = () => [...container.querySelectorAll("[data-orphan]")];
+
+  const removeAll = async (ids, message) => {
+    const ok = await confirmDialog({
+      title: "주인 없는 상담 기록 삭제",
+      message,
+      confirmLabel: "삭제",
+    });
+    if (!ok) return;
+
+    try {
+      await counselingService.remove(ids);
+      toast(`상담 기록 ${ids.length}건을 휴지통으로 옮겼습니다.`);
+      rerender();
+    } catch (error) {
+      toast(error?.message ?? "삭제하지 못했습니다.", "error");
+    }
+  };
+
+  on(
+    container,
+    "[data-orphan-select-all]",
+    (box) => boxes().forEach((item) => (item.checked = box.checked)),
+    "change"
+  );
+
+  on(container, "[data-orphan-remove]", () => {
+    const ids = boxes()
+      .filter((box) => box.checked)
+      .map((box) => box.dataset.orphan);
+
+    if (ids.length === 0) {
+      toast("지울 기록을 먼저 선택해주세요.");
+      return;
+    }
+
+    removeAll(
+      ids,
+      `주인 없는 상담 기록 ${ids.length}건을 삭제할까요?\n` +
+        `휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.`
+    );
+  });
+
+  on(container, "[data-orphan-all]", () =>
+    removeAll(
+      orphans.map((session) => session.id),
+      `주인 없는 상담 기록 ${orphans.length}건을 모두 삭제할까요?\n` +
+        `휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.`
+    )
+  );
+}
+
+/* =========================================================
    화면
    ========================================================= */
 export function render(container, { navigate }) {
-  const students = studentService.getStudents();
+  // 비활성화한 학생도 함께 부릅니다. 상담 기록은 남아 있는데 학생을 고를 수 없으면
+  // 그 기록을 보거나 지울 방법이 없어집니다.
+  const students = studentService.getStudents({
+    name: studentFilter.name,
+    grade: numberOrNull(studentFilter.grade),
+    classNo: numberOrNull(studentFilter.classNo),
+    includeInactive: true,
+  });
 
-  // 이전에 선택한 학생이 사라졌으면 선택을 해제합니다.
+  const total = studentService.getStudents({ includeInactive: true }).length;
+  const orphans = counselingService.getOrphans();
+  const rerender = () => render(container, { navigate });
+
+  // 이전에 선택한 학생이 검색 조건에서 빠졌으면 선택을 해제합니다.
   if (selectedId != null && !students.some((s) => s.id === selectedId)) {
     selectedId = null;
   }
 
   const selected = students.find((s) => s.id === selectedId) ?? null;
-  const sessions = selected ? counselingService.getForStudent(selected.id) : [];
-  const rerender = () => render(container, { navigate });
+  const all = selected ? counselingService.getForStudent(selected.id) : [];
+  const sessions = all.filter((session) => sessionMatches(session, recordFilter.keyword));
 
-  if (students.length === 0) {
+  if (total === 0 && orphans.length === 0) {
     container.innerHTML = `
       <div class="page-head">
         <div>
@@ -628,16 +778,19 @@ export function render(container, { navigate }) {
     </div>
 
     <section class="card" style="margin-bottom:16px">
+      ${searchBar({ id: "counseling", filter: studentFilter, fields: STUDENT_FIELDS })}
       <div class="filter-bar">
         <div class="field field--name">
-          <label class="field__label" for="pick-student">학생</label>
-          <select class="select" id="pick-student">
-            <option value="">학생을 선택하세요</option>
+          <label class="field__label" for="pick-student">학생 ${
+            hasFilter(studentFilter) ? `<span class="caption">(${students.length}/${total}명)</span>` : ""
+          }</label>
+          <select class="select" id="pick-student" ${students.length ? "" : "disabled"}>
+            <option value="">${students.length ? "학생을 선택하세요" : "조건에 맞는 학생이 없습니다"}</option>
             ${students
               .map(
                 (s) =>
                   `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>
-                     ${esc(s.display)}
+                     ${esc(s.display)}${s.isActive ? "" : " (비활성화)"}
                    </option>`
               )
               .join("")}
@@ -655,22 +808,64 @@ export function render(container, { navigate }) {
           ? emptyState({
               icon: "🧑‍🏫",
               title: "학생을 선택해주세요",
-              desc: "학생을 선택하면 상담 기록이 표시됩니다.",
+              desc: "이름·학년·반으로 걸러 찾은 뒤 선택하면 상담 기록이 표시됩니다.",
             })
-          : sessions.length
-            ? `<div class="card__head">
-                 <h2 class="section-title">${esc(selected.name)} 학생의 상담 기록</h2>
-                 <span class="caption">총 ${sessions.length}건</span>
-               </div>
-               <div class="timeline">${sessions.map(sessionCard).join("")}</div>`
-            : emptyState({
-                icon: "🗒️",
-                title: "상담 기록이 없습니다",
-                desc: "‘상담 기록 추가’로 첫 기록을 남겨보세요.",
-                action: `<button class="btn btn--primary" data-add>+ 상담 기록 추가</button>`,
-              })
+          : `<div class="card__head">
+               <h2 class="section-title">${esc(selected.name)} 학생의 상담 기록</h2>
+               <span class="caption">
+                 ${
+                   hasFilter(recordFilter)
+                     ? `${sessions.length}건 조회 · 총 ${all.length}건`
+                     : `총 ${all.length}건`
+                 }
+               </span>
+             </div>
+             ${
+               all.length
+                 ? `<div style="margin-bottom:16px">
+                      ${searchBar({ id: "records", filter: recordFilter, fields: RECORD_FIELDS })}
+                    </div>`
+                 : ""
+             }
+             ${
+               sessions.length
+                 ? `<div class="timeline">${sessions.map(sessionCard).join("")}</div>`
+                 : emptyState(
+                     all.length
+                       ? {
+                           icon: "🔍",
+                           title: "조건에 맞는 상담 기록이 없습니다",
+                           desc: "검색어를 바꾸거나 초기화해 보세요.",
+                           action: `<button class="btn btn--secondary" data-search-reset="records">검색 조건 초기화</button>`,
+                         }
+                       : {
+                           icon: "🗒️",
+                           title: "상담 기록이 없습니다",
+                           desc: "‘상담 기록 추가’로 첫 기록을 남겨보세요.",
+                           action: `<button class="btn btn--primary" data-add>+ 상담 기록 추가</button>`,
+                         }
+                   )
+             }`
       }
-    </section>`;
+    </section>
+
+    ${orphanSection(orphans)}`;
+
+  bindSearchBar(container, {
+    id: "counseling",
+    filter: studentFilter,
+    fields: STUDENT_FIELDS,
+    onChange: rerender,
+  });
+
+  bindSearchBar(container, {
+    id: "records",
+    filter: recordFilter,
+    fields: RECORD_FIELDS,
+    onChange: rerender,
+  });
+
+  bindOrphanSection(container, orphans, rerender);
 
   on(
     container,

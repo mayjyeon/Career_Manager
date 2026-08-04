@@ -9,10 +9,13 @@
  */
 import {
   commitSessions,
+  ensureSynced,
   purge as purgeOwn,
   restore as restoreOwn,
+  sessions as sessionStore,
   softDelete as softDeleteOwn,
   students as studentStore,
+  teacherPortfolios,
   trash as ownTrash,
 } from "./store.js";
 import { assignments, notices, portfolios, submissions } from "./board.js";
@@ -88,6 +91,21 @@ export function listTrash(role) {
         id: session.id,
       });
     }
+
+    // 선생님이 등록한 포트폴리오. 학생이 올린 것은 아래 boardKinds 에서 모읍니다.
+    for (const entry of ownTrash.portfolios()) {
+      if (entry.deletedWith) continue; // 학생과 함께 지워진 자료
+
+      items.push({
+        kind: "포트폴리오",
+        title: entry.title || (entry.body ?? "").slice(0, 30) || "제목 없음",
+        detail: `선생님 등록 · ${entry.studentName ?? "이름 없음"}`,
+        deletedAt: entry.deletedAt,
+        source: "own",
+        collection: "portfolios",
+        id: entry.id,
+      });
+    }
   }
 
   for (const { key, label, store } of boardKinds) {
@@ -112,12 +130,9 @@ export function listTrash(role) {
    ========================================================= */
 const boardStore = (name) => boardKinds.find((k) => k.key === name)?.store ?? null;
 
-/** 학생과 함께 지워진 상담 기록의 문서 번호. */
-function relatedSessions(studentId) {
-  return ownTrash
-    .sessions()
-    .filter((row) => row.deletedWith === studentId)
-    .map((row) => row.id);
+/** 학생과 함께 지워진 자료의 문서 번호. 되살릴 때는 이만큼만 함께 돌아옵니다. */
+function deletedWith(rows, studentId) {
+  return rows.filter((row) => row.deletedWith === studentId).map((row) => row.id);
 }
 
 export async function restoreItem(item) {
@@ -127,9 +142,12 @@ export async function restoreItem(item) {
   }
 
   if (item.collection === "students") {
-    const related = relatedSessions(item.id);
+    const sessions = deletedWith(ownTrash.sessions(), item.id);
+    const portfolios = deletedWith(ownTrash.portfolios(), item.id);
+
     await restoreOwn("students", item.id);
-    if (related.length) await restoreOwn("sessions", related);
+    if (sessions.length) await restoreOwn("sessions", sessions);
+    if (portfolios.length) await restoreOwn("portfolios", portfolios);
     return;
   }
 
@@ -143,8 +161,15 @@ export async function purgeItem(item) {
   }
 
   if (item.collection === "students") {
-    const related = relatedSessions(item.id);
-    if (related.length) await purgeOwn("sessions", related);
+    await ensureSynced(["portfolios"]);
+
+    // 학생과 함께 지운 것뿐 아니라 그 전에 따로 지워 둔 것까지 모두 없앱니다.
+    // 하나라도 남으면 주인 없는 기록이 되어 통계에서 걷어내야 합니다.
+    const sessions = sessionStore.allIdsForStudent(item.id);
+    const portfolios = teacherPortfolios.allIdsForStudent(item.id);
+
+    if (sessions.length) await purgeOwn("sessions", sessions);
+    if (portfolios.length) await purgeOwn("portfolios", portfolios);
     await purgeOwn("students", item.id);
     return;
   }
@@ -181,37 +206,51 @@ export async function purgeExpired(role) {
    지우기
    ========================================================= */
 /**
- * 학생을 휴지통으로 보냅니다. 상담 기록도 함께 들어갑니다.
+ * 학생을 휴지통으로 보냅니다. 상담 기록과 선생님이 등록한 포트폴리오도 함께 들어갑니다.
  *
- * 함께 지운 기록에는 deletedWith 를 붙여, 휴지통 목록에 따로 나오지 않고
+ * 함께 지운 자료에는 deletedWith 를 붙여, 휴지통 목록에 따로 나오지 않고
  * 학생을 되살릴 때 같이 돌아오게 합니다.
  *
  * 학년도·학년·반·번호는 학생 행 안에 들어 있어 따로 지울 것이 없습니다.
  *
  * @param {string[]} studentIds
- * @param {(studentId: string) => string[]} findSessions
  */
-export async function trashStudents(studentIds, findSessions) {
+export async function trashStudents(studentIds) {
+  // 포트폴리오는 그 탭을 열 때 붙이므로, 학생 관리 화면에서 지울 때는
+  // 먼저 불러와야 남는 자료 없이 함께 옮길 수 있습니다.
+  await ensureSynced(["portfolios"]);
+
   const deletedAt = new Date().toISOString();
   const sessionOps = [];
+  const portfolioOps = [];
 
   for (const studentId of studentIds) {
-    for (const id of findSessions(studentId)) {
+    for (const row of sessionStore.forStudent(studentId)) {
       sessionOps.push({
-        id,
+        id: row.id,
         mode: "update",
         fields: { deletedAt, deletedWith: studentId },
       });
     }
+
+    for (const row of teacherPortfolios.forStudent(studentId)) {
+      portfolioOps.push({ id: row.id, fields: { deletedAt, deletedWith: studentId } });
+    }
   }
 
   if (sessionOps.length) await commitSessions(sessionOps);
+  if (portfolioOps.length) await teacherPortfolios.save(portfolioOps);
 
   // 같은 반 학생을 여러 명 지워도 그 반 문서는 한 번만 씁니다.
   await softDeleteOwn("students", studentIds);
 }
 
-/** 상담 기록 하나를 휴지통으로 보냅니다. */
-export function trashSession(sessionId) {
-  return softDeleteOwn("sessions", sessionId);
+/** 상담 기록을 휴지통으로 보냅니다. 여러 건을 한 번에 보낼 수 있습니다. */
+export function trashSession(sessionIds) {
+  return softDeleteOwn("sessions", sessionIds);
+}
+
+/** 선생님이 등록한 포트폴리오를 휴지통으로 보냅니다. */
+export function trashPortfolio(entryIds) {
+  return softDeleteOwn("portfolios", entryIds);
 }

@@ -5,11 +5,12 @@
 import { describeFirestoreError, initFirebase, FirebaseConfigError } from "./firebase.js";
 import { signInWithGoogle, signOutUser, watchUser } from "./auth.js";
 import { readText, writeText } from "./local.js";
-import { startSync, stopSync } from "./store.js";
+import { ensureSynced, isSynced, startSync, stopSync } from "./store.js";
 import {
   ensureSubscribed,
   isSubscribed,
   profiles,
+  session,
   startBoardSync,
   stopBoardSync,
 } from "./board.js";
@@ -153,17 +154,20 @@ function markActive(id) {
 function renderCurrentView() {
   if (!currentId) return;
   const view = byId.get(currentId) ?? views[0];
+
+  // 공용 자료(공지·과제·제출물·포트폴리오)와 선생님 계정 안의 자료를 나눠 붙입니다.
   const needs = view.meta.needs ?? [];
+  const owns = session.role() === TEACHER ? (view.meta.owns ?? []) : [];
 
   // 화면마다 필요한 자료는 그 화면을 열 때 구독합니다.
   // 로그인하자마자 전부 붙이면 보지도 않을 자료까지 읽어 오게 됩니다.
-  if (needs.length > 0 && !isSubscribed(needs)) {
+  if ((needs.length || owns.length) && !(isSubscribed(needs) && isSynced(owns))) {
     elements.view.innerHTML = `
       <div class="card card--quiet">
         <p class="muted">불러오는 중…</p>
       </div>`;
 
-    ensureSubscribed(needs).then(scheduleRerender, (error) => {
+    Promise.all([ensureSubscribed(needs), ensureSynced(owns)]).then(scheduleRerender, (error) => {
       elements.view.innerHTML = "";
       toast(describeFirestoreError(error, "자료를 불러오지 못했습니다."), "error");
     });

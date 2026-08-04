@@ -6,6 +6,11 @@
  *   users/{uid}/sessions/{id}             { studentId, sessionDate, sessionNo, category, topics,
  *                                           topicOther, meetingType, period, subject,
  *                                           durationMinutes, content, intervention, … }
+ *   users/{uid}/portfolios/{학년도-학년-반} { schoolYear, grade, classNo, entries: [...], updatedAt }
+ *
+ * 포트폴리오는 두 갈래입니다. 학생이 스스로 올린 것은 board.js 가 맡는 공용 컬렉션에 있고,
+ * 선생님이 엑셀로 올리거나 직접 적어 넣은 것은 여기(users/{uid}/portfolios)에 있어
+ * 선생님만 볼 수 있습니다.
  *
  * 상담 기록의 필드 이름은 진로상담일지 서식의 칸을 따릅니다.
  *   content      내담자가 진술한 문제와 상황
@@ -40,13 +45,19 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { describeFirestoreError, firebaseContext } from "./firebase.js";
 
-const COLLECTIONS = ["classes", "sessions"];
+/** 로그인하자마자 붙이는 컬렉션. 어느 화면에서든 필요합니다. */
+const CORE_COLLECTIONS = ["classes", "sessions"];
 
-const emptyCache = () => ({ classes: [], sessions: [] });
+/**
+ * 그 화면을 열 때 붙이는 컬렉션.
+ * 포트폴리오는 포트폴리오 탭에서만 쓰므로 미리 읽어 오지 않습니다.
+ */
+const LAZY_COLLECTIONS = ["portfolios"];
+
+const emptyCache = () => ({ classes: [], sessions: [], portfolios: [] });
 
 let cache = emptyCache();
 let currentUid = null;
-let unsubscribes = [];
 let changeHandler = null;
 let errorHandler = null;
 
@@ -68,11 +79,61 @@ function notifyError(error, fallback) {
   errorHandler?.(describeFirestoreError(error, fallback), error);
 }
 
+/** 이름 → { unsubscribe, ready, done } */
+const active = new Map();
+
+/** 메모리에 만들어 둔 색인을 버립니다(새 스냅샷이 도착했을 때). */
+function invalidateCache(name) {
+  if (name === "sessions") invalidateSessions();
+  else grouped[name]?.invalidate();
+}
+
+/** 컬렉션 하나를 구독합니다. 이미 붙어 있으면 통신하지 않습니다. */
+function subscribe(name) {
+  if (active.has(name)) return active.get(name).ready;
+
+  let settle;
+  const ready = new Promise((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+
+  const entry = { unsubscribe: null, ready, done: false };
+  active.set(name, entry);
+
+  entry.unsubscribe = onSnapshot(
+    collectionRef(name),
+    (snapshot) => {
+      cache[name] = snapshot.docs.map((docSnapshot) => ({
+        id: docSnapshot.id,
+        ...docSnapshot.data(),
+      }));
+      invalidateCache(name);
+
+      if (!entry.done) {
+        entry.done = true;
+        settle.resolve();
+      }
+      notifyChange();
+    },
+    (error) => {
+      if (!entry.done) {
+        // 다음에 그 화면을 다시 열면 새로 시도할 수 있게 지워 둡니다.
+        active.delete(name);
+        settle.reject(error);
+        return;
+      }
+      notifyError(error, "데이터를 불러오는 중 문제가 발생했습니다.");
+    }
+  );
+
+  return ready;
+}
+
 /**
  * 로그인한 사용자의 데이터를 실시간으로 구독합니다.
  * @param {string} uid
  * @param {{ onChange?: () => void, onError?: (message: string, error: unknown) => void }} handlers
- * @returns {Promise<void>} 두 컬렉션의 첫 데이터가 모두 도착하면 완료됩니다.
+ * @returns {Promise<void>} 기본 컬렉션의 첫 데이터가 모두 도착하면 완료됩니다.
  */
 export function startSync(uid, { onChange, onError } = {}) {
   stopSync();
@@ -81,54 +142,30 @@ export function startSync(uid, { onChange, onError } = {}) {
   changeHandler = onChange ?? null;
   errorHandler = onError ?? null;
 
-  return new Promise((resolve, reject) => {
-    const pending = new Set(COLLECTIONS);
-    let settled = false;
+  return Promise.all(CORE_COLLECTIONS.map(subscribe)).then(() => undefined);
+}
 
-    const markReady = (name) => {
-      if (settled) return;
-      pending.delete(name);
-      if (pending.size === 0) {
-        settled = true;
-        resolve();
-      }
-    };
+/** 이 컬렉션의 첫 배달이 끝났는지. */
+export function isSynced(names) {
+  return names.every((name) => active.get(name)?.done === true);
+}
 
-    for (const name of COLLECTIONS) {
-      const unsubscribe = onSnapshot(
-        collectionRef(name),
-        (snapshot) => {
-          cache[name] = snapshot.docs.map((docSnapshot) => ({
-            id: docSnapshot.id,
-            ...docSnapshot.data(),
-          }));
-          if (name === "classes") invalidate();
-          else invalidateSessions();
-          markReady(name);
-          notifyChange();
-        },
-        (error) => {
-          if (!settled) {
-            settled = true;
-            reject(error);
-            return;
-          }
-          notifyError(error, "데이터를 불러오는 중 문제가 발생했습니다.");
-        }
-      );
-
-      unsubscribes.push(unsubscribe);
-    }
-  });
+/**
+ * 화면이 필요로 하는 컬렉션을 그때 붙입니다.
+ * @param {string[]} names
+ * @returns {Promise<void>}
+ */
+export function ensureSynced(names) {
+  if (!currentUid || names.length === 0) return Promise.resolve();
+  return Promise.all(names.map(subscribe)).then(() => undefined);
 }
 
 /** 구독을 해제하고 메모리에 있는 데이터를 비웁니다(로그아웃 시). */
 export function stopSync() {
-  unsubscribes.forEach((unsubscribe) => unsubscribe());
-  unsubscribes = [];
+  active.forEach((entry) => entry.unsubscribe?.());
+  active.clear();
   cache = emptyCache();
-  invalidate();
-  invalidateSessions();
+  for (const name of [...CORE_COLLECTIONS, ...LAZY_COLLECTIONS]) invalidateCache(name);
   currentUid = null;
   changeHandler = null;
   errorHandler = null;
@@ -140,15 +177,15 @@ export function newId() {
 }
 
 /* =========================================================
-   반 문서 ↔ 학생 행
+   반 문서 ↔ 행
 
-   화면은 학생을 평평한 목록으로 다룹니다. 반 문서 안에 들어 있다는 사실은
-   이 파일 밖으로 나가지 않습니다.
+   화면은 학생과 포트폴리오를 평평한 목록으로 다룹니다.
+   반 문서 안에 들어 있다는 사실은 이 파일 밖으로 나가지 않습니다.
    ========================================================= */
 /** 반 문서를 가리키는 이름. 문서 번호를 그대로 씁니다. */
 const classKeyOf = ({ schoolYear, grade, classNo }) => `${schoolYear}-${grade}-${classNo}`;
 
-/** 학생 행에는 없고 반 문서에만 있는 값. */
+/** 행에는 없고 반 문서에만 있는 값. */
 const SEAT_KEYS = ["schoolYear", "grade", "classNo", "classKey"];
 
 function stripSeat(row) {
@@ -166,83 +203,10 @@ function clean(row) {
   return copy;
 }
 
-let flat = null;
-let index = null;
 let liveSessions = null;
-
-function invalidate() {
-  flat = null;
-  index = null;
-}
 
 function invalidateSessions() {
   liveSessions = null;
-}
-
-/** 모든 반 문서를 펼쳐 학생 한 명이 한 줄인 목록으로 만듭니다. */
-function allRows() {
-  if (flat) return flat;
-
-  flat = [];
-  for (const cls of cache.classes) {
-    for (const student of cls.students ?? []) {
-      flat.push({
-        ...student,
-        schoolYear: cls.schoolYear,
-        grade: cls.grade,
-        classNo: cls.classNo,
-        classKey: cls.id,
-      });
-    }
-  }
-  return flat;
-}
-
-function rowsById() {
-  if (!index) index = new Map(allRows().map((row) => [row.id, row]));
-  return index;
-}
-
-function findClass(key) {
-  return cache.classes.find((cls) => cls.id === key) ?? null;
-}
-
-function ensureClass({ schoolYear, grade, classNo }) {
-  const key = classKeyOf({ schoolYear, grade, classNo });
-  let cls = findClass(key);
-
-  if (!cls) {
-    cls = { id: key, schoolYear, grade, classNo, students: [] };
-    cache.classes.push(cls);
-  }
-
-  return cls;
-}
-
-/**
- * 학생 행을 반 문서에서 뺍니다.
- * @returns {string|null} 내용이 바뀐 반 문서 이름
- */
-function removeRow(id) {
-  for (const cls of cache.classes) {
-    const at = (cls.students ?? []).findIndex((student) => student.id === id);
-    if (at >= 0) {
-      cls.students.splice(at, 1);
-      return cls.id;
-    }
-  }
-  return null;
-}
-
-/** 학생 행을 반 문서에 넣습니다. 이미 있으면 그 자리를 덮어씁니다. */
-function putRow(seat, row) {
-  const cls = ensureClass(seat);
-  const at = cls.students.findIndex((student) => student.id === row.id);
-
-  if (at >= 0) cls.students[at] = row;
-  else cls.students.push(row);
-
-  return cls.id;
 }
 
 /* =========================================================
@@ -274,100 +238,206 @@ function send(promise) {
   promise.catch((error) => notifyError(error, "저장하지 못했습니다."));
 }
 
-/** 바뀐 반 문서만 통째로 다시 씁니다. 빈 반은 문서를 지웁니다. */
-async function commitClasses(keys) {
-  const list = [...keys].filter(Boolean);
-  if (list.length === 0) return;
-
-  const emptied = [];
-
-  await commitInChunks(list, (batch, key) => {
-    const ref = doc(collectionRef("classes"), key);
-    const cls = findClass(key);
-
-    if (!cls || cls.students.length === 0) {
-      batch.delete(ref);
-      emptied.push(key);
-      return;
-    }
-
-    // 번호 순으로 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
-    cls.students.sort((a, b) => (a.studentNo ?? 0) - (b.studentNo ?? 0));
-
-    batch.set(ref, {
-      schoolYear: cls.schoolYear,
-      grade: cls.grade,
-      classNo: cls.classNo,
-      students: cls.students,
-      updatedAt: new Date().toISOString(),
-    });
-  });
-
-  if (emptied.length) {
-    cache.classes = cache.classes.filter((cls) => !emptied.includes(cls.id));
-    invalidate();
-  }
-}
-
 /**
- * 학생을 추가·수정·이동·삭제합니다.
+ * ‘한 반이 문서 하나’ 인 컬렉션을 다룹니다.
  *
- * 같은 반 학생을 여러 명 바꿔도 그 반 문서는 한 번만 씁니다.
- * 명렬표 900명을 올려도 쓰기는 반 개수(30건)로 끝납니다.
+ * 학생 명부(classes)와 선생님이 등록한 포트폴리오(portfolios)는 문서 안의
+ * 목록 이름과 정렬만 다르고 나머지가 같아 여기서 한 벌만 만들어 씁니다.
  *
- * @param {Array<{
- *   id: string,
- *   seat?: { schoolYear: number, grade: number, classNo: number, studentNo?: number },
- *   fields?: object,
- *   drop?: boolean,
- * }>} changes
- * @returns {Promise<void>}
+ * @param {string} name    컬렉션 이름
+ * @param {string} listKey 문서 안에서 목록이 들어 있는 칸 이름
+ * @param {(a: object, b: object) => number} sort 문서에 담기 전 목록을 정렬하는 방법
  */
-async function saveStudents(changes) {
-  const dirty = new Set();
+function groupedCollection(name, listKey, sort) {
+  let flat = null;
+  let index = null;
 
-  // 색인은 한 번만 만들고 바뀐 만큼 따라 고칩니다.
-  // 명렬표 900명을 한 번에 넣을 때 반복마다 다시 만들면 너무 느립니다.
-  const known = new Map(rowsById());
+  const invalidate = () => {
+    flat = null;
+    index = null;
+  };
 
-  for (const { id, seat, fields = {}, drop } of changes) {
-    const current = known.get(id) ?? null;
+  const docs = () => cache[name];
+  const findDoc = (key) => docs().find((group) => group.id === key) ?? null;
 
-    if (drop) {
-      dirty.add(removeRow(id));
-      known.delete(id);
-      continue;
+  /** 모든 반 문서를 펼쳐 한 줄이 한 항목인 목록으로 만듭니다. */
+  function rows() {
+    if (flat) return flat;
+
+    flat = [];
+    for (const group of docs()) {
+      for (const row of group[listKey] ?? []) {
+        flat.push({
+          ...row,
+          schoolYear: group.schoolYear,
+          grade: group.grade,
+          classNo: group.classNo,
+          classKey: group.id,
+        });
+      }
     }
-
-    // 자리를 새로 정하지 않으면 지금 있는 반에 그대로 둡니다.
-    const place = seat ?? current;
-    if (!place) continue;
-
-    const key = classKeyOf(place);
-
-    // 반이 바뀌면 옛 반 문서에서 먼저 뺍니다(그 문서도 다시 써야 합니다).
-    if (current && current.classKey !== key) dirty.add(removeRow(id));
-
-    const { studentNo } = seat ?? {};
-    const row = clean({
-      ...(current ? stripSeat(current) : {}),
-      ...(studentNo === undefined ? {} : { studentNo }),
-      ...fields,
-      id,
-    });
-
-    putRow(place, row);
-
-    // place 는 좌석만 쓰고 나머지 값은 방금 만든 row 를 따릅니다.
-    const { schoolYear, grade, classNo } = place;
-    known.set(id, { ...row, schoolYear, grade, classNo, classKey: key });
-    dirty.add(key);
+    return flat;
   }
 
-  invalidate();
-  notifyChange();
-  await commitClasses(dirty);
+  function byId() {
+    if (!index) index = new Map(rows().map((row) => [row.id, row]));
+    return index;
+  }
+
+  function ensureDoc({ schoolYear, grade, classNo }) {
+    const key = classKeyOf({ schoolYear, grade, classNo });
+    let group = findDoc(key);
+
+    if (!group) {
+      group = { id: key, schoolYear, grade, classNo, [listKey]: [] };
+      docs().push(group);
+    }
+    if (!group[listKey]) group[listKey] = [];
+
+    return group;
+  }
+
+  /**
+   * 행을 반 문서에서 뺍니다.
+   * @returns {string|null} 내용이 바뀐 반 문서 이름
+   */
+  function removeRow(id) {
+    for (const group of docs()) {
+      const at = (group[listKey] ?? []).findIndex((row) => row.id === id);
+      if (at >= 0) {
+        group[listKey].splice(at, 1);
+        return group.id;
+      }
+    }
+    return null;
+  }
+
+  /** 행을 반 문서에 넣습니다. 이미 있으면 그 자리를 덮어씁니다. */
+  function putRow(seat, row) {
+    const group = ensureDoc(seat);
+    const at = group[listKey].findIndex((item) => item.id === row.id);
+
+    if (at >= 0) group[listKey][at] = row;
+    else group[listKey].push(row);
+
+    return group.id;
+  }
+
+  /** 바뀐 반 문서만 통째로 다시 씁니다. 빈 반은 문서를 지웁니다. */
+  async function commit(keys) {
+    const list = [...keys].filter(Boolean);
+    if (list.length === 0) return;
+
+    const emptied = [];
+
+    await commitInChunks(list, (batch, key) => {
+      const ref = doc(collectionRef(name), key);
+      const group = findDoc(key);
+
+      if (!group || group[listKey].length === 0) {
+        batch.delete(ref);
+        emptied.push(key);
+        return;
+      }
+
+      // 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
+      group[listKey].sort(sort);
+
+      batch.set(ref, {
+        schoolYear: group.schoolYear,
+        grade: group.grade,
+        classNo: group.classNo,
+        [listKey]: group[listKey],
+        updatedAt: new Date().toISOString(),
+      });
+    });
+
+    if (emptied.length) {
+      cache[name] = docs().filter((group) => !emptied.includes(group.id));
+      invalidate();
+    }
+  }
+
+  /**
+   * 항목을 추가·수정·이동·삭제합니다.
+   *
+   * 같은 반 항목을 여러 개 바꿔도 그 반 문서는 한 번만 씁니다.
+   * 명렬표 900명을 올려도 쓰기는 반 개수(30건)로 끝납니다.
+   *
+   * @param {Array<{
+   *   id: string,
+   *   seat?: { schoolYear: number, grade: number, classNo: number, studentNo?: number },
+   *   fields?: object,
+   *   drop?: boolean,
+   * }>} changes
+   * @returns {Promise<void>}
+   */
+  async function save(changes) {
+    const dirty = new Set();
+
+    // 색인은 한 번만 만들고 바뀐 만큼 따라 고칩니다.
+    // 900건을 한 번에 넣을 때 반복마다 다시 만들면 너무 느립니다.
+    const known = new Map(byId());
+
+    for (const { id, seat, fields = {}, drop } of changes) {
+      const current = known.get(id) ?? null;
+
+      if (drop) {
+        dirty.add(removeRow(id));
+        known.delete(id);
+        continue;
+      }
+
+      // 자리를 새로 정하지 않으면 지금 있는 반에 그대로 둡니다.
+      const place = seat ?? current;
+      if (!place) continue;
+
+      const key = classKeyOf(place);
+
+      // 반이 바뀌면 옛 반 문서에서 먼저 뺍니다(그 문서도 다시 써야 합니다).
+      if (current && current.classKey !== key) dirty.add(removeRow(id));
+
+      const { studentNo } = seat ?? {};
+      const row = clean({
+        ...(current ? stripSeat(current) : {}),
+        ...(studentNo === undefined ? {} : { studentNo }),
+        ...fields,
+        id,
+      });
+
+      putRow(place, row);
+
+      // place 는 좌석만 쓰고 나머지 값은 방금 만든 row 를 따릅니다.
+      const { schoolYear, grade, classNo } = place;
+      known.set(id, { ...row, schoolYear, grade, classNo, classKey: key });
+      dirty.add(key);
+    }
+
+    invalidate();
+    notifyChange();
+    await commit(dirty);
+  }
+
+  return { rows, byId, findDoc, save, invalidate };
 }
+
+const byStudentNo = (a, b) => (a.studentNo ?? 0) - (b.studentNo ?? 0);
+
+/** 반 단위로 묶인 컬렉션. 휴지통 함수들이 이름으로 찾아 씁니다. */
+const grouped = {
+  classes: groupedCollection("classes", "students", byStudentNo),
+  portfolios: groupedCollection(
+    "portfolios",
+    "entries",
+    (a, b) => byStudentNo(a, b) || String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
+  ),
+};
+
+/** 휴지통 함수들이 쓰는 이름 → 컬렉션. 학생은 반 문서(classes) 안에 있습니다. */
+const GROUPED_BY_TRASH_NAME = {
+  students: grouped.classes,
+  portfolios: grouped.portfolios,
+};
 
 /* -------- 상담 기록(문서 하나씩) -------- */
 /**
@@ -444,9 +514,10 @@ const asList = (ids) => (Array.isArray(ids) ? ids : [ids]);
 /** 휴지통으로 보냅니다. */
 export function softDelete(name, ids) {
   const deletedAt = new Date().toISOString();
+  const collection = GROUPED_BY_TRASH_NAME[name];
 
-  if (name === "students") {
-    return saveStudents(asList(ids).map((id) => ({ id, fields: { deletedAt } })));
+  if (collection) {
+    return collection.save(asList(ids).map((id) => ({ id, fields: { deletedAt } })));
   }
 
   return commitSessions(
@@ -456,8 +527,10 @@ export function softDelete(name, ids) {
 
 /** 휴지통에서 되살립니다. */
 export function restore(name, ids) {
-  if (name === "students") {
-    return saveStudents(asList(ids).map((id) => ({ id, fields: { deletedAt: null } })));
+  const collection = GROUPED_BY_TRASH_NAME[name];
+
+  if (collection) {
+    return collection.save(asList(ids).map((id) => ({ id, fields: { deletedAt: null } })));
   }
 
   return commitSessions(
@@ -467,8 +540,10 @@ export function restore(name, ids) {
 
 /** 완전히 지웁니다. 되돌릴 수 없습니다. */
 export async function purge(name, ids) {
-  if (name === "students") {
-    await saveStudents(asList(ids).map((id) => ({ id, drop: true })));
+  const collection = GROUPED_BY_TRASH_NAME[name];
+
+  if (collection) {
+    await collection.save(asList(ids).map((id) => ({ id, drop: true })));
     return;
   }
 
@@ -489,8 +564,9 @@ export async function purge(name, ids) {
 
 /** 휴지통에 있는 자료. */
 export const trash = {
-  students: () => allRows().filter((row) => row.deletedAt),
+  students: () => grouped.classes.rows().filter((row) => row.deletedAt),
   sessions: () => cache.sessions.filter((row) => row.deletedAt),
+  portfolios: () => grouped.portfolios.rows().filter((row) => row.deletedAt),
 };
 
 /* =========================================================
@@ -499,15 +575,15 @@ export const trash = {
 export const students = {
   /** 휴지통에 없는 학생. 좌석(학년도·학년·반·번호)이 함께 붙어 있습니다. */
   all() {
-    return allRows().filter((row) => !row.deletedAt);
+    return grouped.classes.rows().filter((row) => !row.deletedAt);
   },
   find(id) {
-    const row = rowsById().get(id) ?? null;
+    const row = grouped.classes.byId().get(id) ?? null;
     return row && !row.deletedAt ? row : null;
   },
   /** 같은 학년도/학년/반/번호 자리에 이미 있는 학생. */
   findSeat({ schoolYear, grade, classNo, studentNo }) {
-    const cls = findClass(classKeyOf({ schoolYear, grade, classNo }));
+    const cls = grouped.classes.findDoc(classKeyOf({ schoolYear, grade, classNo }));
     if (!cls) return null;
 
     const row = (cls.students ?? []).find(
@@ -534,22 +610,84 @@ export const students = {
    * 실패하면 예외를 던지므로 부르는 쪽에서 기다렸다가 알려주세요(명렬표 업로드).
    */
   save(changes) {
-    return saveStudents(changes);
+    return grouped.classes.save(changes);
   },
 
   /* 아래 셋은 화면에서 곧바로 부르는 길이라
      기다리지 않아도 실패가 묻히지 않도록 여기서 알림까지 처리합니다. */
   create(seat, fields) {
     const id = newId();
-    send(saveStudents([{ id, seat, fields }]));
+    send(grouped.classes.save([{ id, seat, fields }]));
     return id;
   },
   update(id, fields) {
-    send(saveStudents([{ id, fields: { ...fields, updatedAt: new Date().toISOString() } }]));
+    send(
+      grouped.classes.save([{ id, fields: { ...fields, updatedAt: new Date().toISOString() } }])
+    );
   },
   /** 다른 반으로 옮깁니다(반이 바뀌면 문서 두 개를 씁니다). */
   move(id, seat, fields = {}) {
-    send(saveStudents([{ id, seat, fields: { ...fields, updatedAt: new Date().toISOString() } }]));
+    send(
+      grouped.classes.save([
+        { id, seat, fields: { ...fields, updatedAt: new Date().toISOString() } },
+      ])
+    );
+  },
+};
+
+/**
+ * 선생님이 등록한 포트폴리오.
+ *
+ * 학생이 스스로 올린 포트폴리오(board.js)와 달리 선생님 계정 안에만 있어
+ * 학생에게는 보이지 않습니다. 학생 명부와 같은 반 문서 구조라
+ * 한 반 30명 분량을 문서 하나로 씁니다.
+ */
+export const teacherPortfolios = {
+  /** 휴지통에 없는 항목. 자리(학년도·학년·반·번호)가 함께 붙어 있습니다. */
+  all() {
+    return grouped.portfolios.rows().filter((row) => !row.deletedAt);
+  },
+  find(id) {
+    const row = grouped.portfolios.byId().get(id) ?? null;
+    return row && !row.deletedAt ? row : null;
+  },
+  forStudent(studentId) {
+    return teacherPortfolios.all().filter((row) => row.studentId === studentId);
+  },
+  /** 휴지통에 있는 것까지 포함한 그 학생의 항목 번호(학생을 완전히 지울 때 씁니다). */
+  allIdsForStudent(studentId) {
+    return grouped.portfolios
+      .rows()
+      .filter((row) => row.studentId === studentId)
+      .map((row) => row.id);
+  },
+  /** 새 항목에 들어갈 값. */
+  fields({ studentId, studentName, title, body, source = null }) {
+    const now = new Date().toISOString();
+    return {
+      studentId,
+      studentName,
+      title,
+      body,
+      // 어디서 온 자료인지(예: "엑셀 업로드") 나중에 알아볼 수 있게 남깁니다.
+      source,
+      createdAt: now,
+      updatedAt: now,
+    };
+  },
+  /**
+   * 여러 건을 한 번에 저장합니다. 같은 반은 문서 한 번으로 묶입니다.
+   * 실패하면 예외를 던지므로 부르는 쪽에서 기다렸다가 알려주세요(엑셀 업로드).
+   */
+  save(changes) {
+    return grouped.portfolios.save(changes);
+  },
+  update(id, fields) {
+    send(
+      grouped.portfolios.save([
+        { id, fields: { ...fields, updatedAt: new Date().toISOString() } },
+      ])
+    );
   },
 };
 
@@ -565,6 +703,15 @@ export const sessions = {
   },
   forStudent(studentId) {
     return sessions.all().filter((x) => x.studentId === studentId);
+  },
+  /**
+   * 휴지통에 있는 것까지 포함한 그 학생의 상담 기록 번호.
+   *
+   * 학생을 완전히 지울 때 씁니다. 학생과 함께 지운 기록(deletedWith)뿐 아니라
+   * 그 전에 따로 지워 둔 기록까지 챙겨야 주인 없는 기록이 남지 않습니다.
+   */
+  allIdsForStudent(studentId) {
+    return cache.sessions.filter((row) => row.studentId === studentId).map((row) => row.id);
   },
   update(id, fields) {
     patchSession(id, { ...fields, updatedAt: new Date().toISOString() });

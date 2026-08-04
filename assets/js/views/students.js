@@ -6,6 +6,14 @@ import { TRASH_DAYS } from "../trash.js";
 import { readSpreadsheet, SheetError } from "../sheet.js";
 import { parseRoster, buildImportPlan } from "../roster.js";
 import {
+  STUDENT_FIELDS,
+  bindSearchBar,
+  createFilter,
+  hasFilter,
+  numberOrNull,
+  searchBar,
+} from "./search-bar.js";
+import {
   esc,
   initials,
   emptyState,
@@ -20,7 +28,7 @@ import {
 export const meta = { id: "students", icon: "👥", title: "학생 관리", needs: ["profiles"] };
 
 // 화면을 다시 그려도 검색 조건은 유지합니다.
-const filter = { name: "", grade: "", classNo: "" };
+const filter = createFilter(STUDENT_FIELDS);
 
 // 일괄 삭제를 위해 고른 학생.
 const selected = new Set();
@@ -439,12 +447,6 @@ function watchLegacy(container, rerender) {
   });
 }
 
-/** 검색 칸에 적은 숫자. 비어 있거나 숫자가 아니면 조건에서 뺍니다. */
-function numberOrNull(text) {
-  const parsed = Number.parseInt(text, 10);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
 export function render(container) {
   const items = studentService.getStudents({
     name: filter.name,
@@ -452,7 +454,7 @@ export function render(container) {
     classNo: numberOrNull(filter.classNo),
   });
 
-  const hasFilter = Boolean(filter.name || filter.grade || filter.classNo);
+  const filtered = hasFilter(filter);
   const rerender = () => render(container);
 
   // 검색 조건이 바뀌어 사라진 학생은 선택에서도 뺍니다.
@@ -475,25 +477,7 @@ export function render(container) {
     </div>
 
     <section class="card" style="margin-bottom:16px">
-      <form class="filter-bar" data-search>
-        <div class="field field--name">
-          <label class="field__label" for="q-name">이름</label>
-          <input class="input" id="q-name" name="name" value="${esc(filter.name)}"
-                 placeholder="이름으로 검색" />
-        </div>
-        <div class="field field--num">
-          <label class="field__label" for="q-grade">학년</label>
-          <input class="input" id="q-grade" name="grade" inputmode="numeric"
-                 value="${esc(filter.grade)}" />
-        </div>
-        <div class="field field--num">
-          <label class="field__label" for="q-class">반</label>
-          <input class="input" id="q-class" name="classNo" inputmode="numeric"
-                 value="${esc(filter.classNo)}" />
-        </div>
-        <button class="btn btn--secondary" type="submit">검색</button>
-        ${hasFilter ? `<button class="btn btn--ghost" type="button" data-reset>초기화</button>` : ""}
-      </form>
+      ${searchBar({ id: "students", filter, fields: STUDENT_FIELDS })}
     </section>
 
     ${
@@ -527,13 +511,13 @@ export function render(container) {
                </table>
              </div>`
           : emptyState({
-              icon: hasFilter ? "🔍" : "👥",
-              title: hasFilter ? "조건에 맞는 학생이 없습니다" : "등록된 학생이 없습니다",
-              desc: hasFilter
+              icon: filtered ? "🔍" : "👥",
+              title: filtered ? "조건에 맞는 학생이 없습니다" : "등록된 학생이 없습니다",
+              desc: filtered
                 ? "검색 조건을 바꾸거나 초기화해 보세요."
                 : "‘학생 추가’로 첫 학생을 등록해 보세요.",
-              action: hasFilter
-                ? `<button class="btn btn--secondary" data-reset>검색 조건 초기화</button>`
+              action: filtered
+                ? `<button class="btn btn--secondary" data-search-reset="students">검색 조건 초기화</button>`
                 : `<button class="btn btn--primary" data-add>+ 학생 추가</button>`,
             })
       }
@@ -545,18 +529,11 @@ export function render(container) {
   /* --- 이벤트 --- */
   watchLegacy(container, rerender);
 
-  const form = container.querySelector("[data-search]");
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    filter.name = form.elements.name.value.trim();
-    filter.grade = form.elements.grade.value.trim();
-    filter.classNo = form.elements.classNo.value.trim();
-    rerender();
-  });
-
-  on(container, "[data-reset]", () => {
-    filter.name = filter.grade = filter.classNo = "";
-    rerender();
+  bindSearchBar(container, {
+    id: "students",
+    filter,
+    fields: STUDENT_FIELDS,
+    onChange: rerender,
   });
 
   on(container, "[data-add]", () => openStudentForm(null, rerender));
@@ -626,6 +603,7 @@ export function render(container) {
         `${names.slice(0, 5).join(", ")}${names.length > 5 ? ` 외 ${names.length - 5}명` : ""}` +
         ` 학생 ${chosen.length}명을 삭제할까요?\n` +
         (sessionCount ? `상담 기록 ${sessionCount}건도 함께 지워집니다.\n` : "") +
+        "선생님이 등록한 포트폴리오도 함께 들어갑니다.\n" +
         `휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.`,
       confirmLabel: "삭제",
     });

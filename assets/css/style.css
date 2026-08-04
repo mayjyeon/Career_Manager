@@ -872,6 +872,10 @@ button { cursor: pointer; }
 .filter-bar .field { min-width: 0; }
 .filter-bar .field--name { flex: 1 1 220px; max-width: 340px; }
 .filter-bar .field--num { flex: 0 0 92px; }
+.filter-bar .field--pick { flex: 0 0 150px; }
+
+/* 카드 안에서 검색 막대가 여러 개 겹칠 때 사이를 벌립니다. */
+.filter-bar + .filter-bar { margin-top: 12px; }
 
 .form-error {
   display: flex;
@@ -923,10 +927,13 @@ button { cursor: pointer; }
 
 .table-wrap--scroll {
   max-height: min(52vh, 420px);
-  overflow-y: auto;
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 10px;
 }
+
+/* 미리보기 표는 칸이 많아 좁은 창에서는 옆으로 밀어 봅니다(글자를 세로로 접지 않습니다). */
+.table-wrap--scroll .table { min-width: 640px; }
 
 .table-wrap--scroll .table th {
   position: sticky;
