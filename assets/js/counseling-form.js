@@ -5,6 +5,7 @@
  * 칸 너비·높이·글자 크기·배경색은 원본 한글 파일에서 읽은 값을 씁니다.
  */
 import { ALIGN, PAGE_B4, buildHwpx, font, paragraph, table } from "./hwpx.js";
+import { topicsToCategory } from "./counseling-journal.js";
 
 /** 원본 서식의 열 너비 (HWPUNIT) */
 const COLUMNS = [2434, 10968, 4561, 3585, 5317, 2451, 2451, 2418, 21223];
@@ -70,7 +71,7 @@ function trimNumber(value) {
 
 /** 표에 넣을 상담 내용 — 줄바꿈을 없애 한 줄로 만듭니다. */
 function summarize(session) {
-  return [session.content, session.followUpAction, session.nextPlan]
+  return [session.content, session.intervention]
     .map((part) => (part ?? "").replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .join(" / ");
@@ -296,7 +297,8 @@ export function toFormEntries(sessions) {
     minutes: session.durationMinutes ?? null,
     studentId: formatStudentId(session.student ?? {}),
     name: session.student?.name ?? "",
-    category: FORM_CATEGORIES.includes(session.category) ? session.category : "기타",
+    // 선택교과·학업은 이 서식에 칸이 없어 기타로 셉니다.
+    category: topicsToCategory(session.topics ?? [session.category]),
     summary: summarize(session),
   }));
 }

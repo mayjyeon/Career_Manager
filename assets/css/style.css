@@ -804,6 +804,38 @@ button { cursor: pointer; }
 .form-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .form-grid .span-2 { grid-column: span 2; }
 
+/* 여러 개를 고르는 항목 (상담 주제 등) */
+.check-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.check-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check-item:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 /* 모달 안에서 작게 쓰는 선택 상자 */
 .select--sm {
   padding: 5px 26px 5px 9px;

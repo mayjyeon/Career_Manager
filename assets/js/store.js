@@ -3,8 +3,15 @@
  * 원본 C# 프로젝트의 EF Core + SQLite(AppDbContext)를 대체합니다.
  *
  *   users/{uid}/classes/{학년도-학년-반}   { schoolYear, grade, classNo, students: [...], updatedAt }
- *   users/{uid}/sessions/{id}             { studentId, sessionDate, sessionNo, category,
- *                                           durationMinutes, content, followUpAction, nextPlan, … }
+ *   users/{uid}/sessions/{id}             { studentId, sessionDate, sessionNo, category, topics,
+ *                                           topicOther, meetingType, period, subject,
+ *                                           durationMinutes, content, intervention, … }
+ *
+ * 상담 기록의 필드 이름은 진로상담일지 서식의 칸을 따릅니다.
+ *   content      내담자가 진술한 문제와 상황
+ *   intervention 상담자 소견 및 개입
+ *   topics       상담 주제 (진로·진학·선택교과·학업·기타 중 여러 개)
+ *   meetingType  상담 시간대 ("class" 수업 중 · "lunch" 점심시간 · "after" 하교 후)
  *
  * 학생은 한 명당 문서 하나가 아니라 **한 반이 문서 하나**입니다.
  *
@@ -101,6 +108,7 @@ export function startSync(uid, { onChange, onError } = {}) {
             ...docSnapshot.data(),
           }));
           if (name === "classes") invalidate();
+          else invalidateSessions();
           markReady(name);
           notifyChange();
         },
@@ -125,6 +133,7 @@ export function stopSync() {
   unsubscribes = [];
   cache = emptyCache();
   invalidate();
+  invalidateSessions();
   currentUid = null;
   changeHandler = null;
   errorHandler = null;
@@ -164,10 +173,15 @@ function clean(row) {
 
 let flat = null;
 let index = null;
+let liveSessions = null;
 
 function invalidate() {
   flat = null;
   index = null;
+}
+
+function invalidateSessions() {
+  liveSessions = null;
 }
 
 /** 모든 반 문서를 펼쳐 학생 한 명이 한 줄인 목록으로 만듭니다. */
@@ -349,11 +363,31 @@ export async function saveStudents(changes) {
 }
 
 /* -------- 상담 기록(문서 하나씩) -------- */
+/**
+ * 진로상담일지 서식으로 바꾸기 전에 저장된 기록을 새 모양으로 맞춰 읽습니다.
+ * 저장된 문서는 건드리지 않고, 읽을 때만 채워 넣습니다.
+ *
+ *   후속 조치 + 다음 계획 → 상담자 소견 및 개입(intervention)
+ *   상담 분류(category)   → 상담 주제(topics)
+ */
+function normalizeSession(row) {
+  if (row.intervention !== undefined && row.topics !== undefined) return row;
+
+  return {
+    ...row,
+    intervention:
+      row.intervention ??
+      [row.followUpAction, row.nextPlan].map((part) => part?.trim()).filter(Boolean).join("\n"),
+    topics: row.topics ?? (row.category ? [row.category] : []),
+  };
+}
+
 function applyLocalSession(row) {
   const rows = cache.sessions;
   const at = rows.findIndex((r) => r.id === row.id);
   if (at >= 0) rows[at] = { ...rows[at], ...row };
   else rows.push(row);
+  invalidateSessions();
 }
 
 function insertSession(fields) {
@@ -512,7 +546,10 @@ export const students = {
 
 export const sessions = {
   all() {
-    return cache.sessions.filter((row) => !row.deletedAt);
+    if (!liveSessions) {
+      liveSessions = cache.sessions.filter((row) => !row.deletedAt).map(normalizeSession);
+    }
+    return liveSessions;
   },
   find(id) {
     return sessions.all().find((x) => x.id === id) || null;
@@ -528,10 +565,14 @@ export const sessions = {
     sessionDate,
     sessionNo,
     category,
+    topics = [],
+    topicOther = null,
+    meetingType = null,
+    period = null,
+    subject = null,
     durationMinutes = null,
     content,
-    followUpAction = null,
-    nextPlan = null,
+    intervention = null,
   }) {
     const now = new Date().toISOString();
     return insertSession({
@@ -539,10 +580,14 @@ export const sessions = {
       sessionDate,
       sessionNo,
       category,
+      topics,
+      topicOther,
+      meetingType,
+      period,
+      subject,
       durationMinutes,
       content,
-      followUpAction,
-      nextPlan,
+      intervention,
       createdAt: now,
       updatedAt: now,
     });
