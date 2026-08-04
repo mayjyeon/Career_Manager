@@ -161,7 +161,7 @@ export const TEACHER_EMAIL = "mayjyeon52@gmail.com";
 - **상담일지 → 상담일지 내보내기** 는 기간(과 학생)을 정해 여러 건을 한 문서로 묶습니다.
 - 상담 기록 카드의 **📄 일지** 는 그 한 건만 바로 내려받습니다.
 - 용지·칸 너비·줄 높이·글자 크기는 원본 한글 파일에서 읽은 값을 그대로 씁니다.
-  (`assets/js/counseling-journal.js`)
+  (`assets/js/counseling-docs.js`)
 - 입력 칸이 곧 서식의 칸입니다.
 
   | 서식의 칸 | 입력 |
@@ -189,7 +189,7 @@ export const TEACHER_EMAIL = "mayjyeon52@gmail.com";
 - **상담시간** 합계와 하단 누계표(A·C·주당시수)를 자동으로 계산합니다.
   내보낼 때 **학기 적용 주 수(B)** 와 **주당 수업시수(D)** 를 입력받습니다.
 - 이 서식은 **50분을 한 시간(차시)** 으로 셉니다.
-  (`assets/js/counseling-form.js` 의 `MINUTES_PER_HOUR`)
+  (`assets/js/counseling-docs.js` 의 `MINUTES_PER_HOUR`)
 
 문서 만들기는 모두 브라우저 안에서 이뤄져 상담 내용이 외부로 나가지 않습니다.
 외부 라이브러리 없이 브라우저에 내장된 압축 기능(`CompressionStream`)만 씁니다.
@@ -346,37 +346,46 @@ assets/
   css/style.css                디자인 토큰 및 전체 스타일
   js/
     app.js                     로그인 게이트 · 내비게이션 · 화면 전환 (원본 MainWindow/MainViewModel)
-    firebase.js                Firebase 앱 초기화
+    firebase.js                Firebase 앱 초기화 · Firestore 오류 문구
     firebase-config.example.js 설정 파일 예시 (복사해서 사용)
     auth.js                    Google 로그인 / 로그아웃
-    store.js                   Firestore 데이터 계층 (원본 AppDbContext)
-    services.js                업무 로직 (원본 StudentService/CounselingService)
-    ui.js                      모달 · 토스트 · 포맷 유틸리티
+    store.js                   상담 자료 데이터 계층 · 옛 문서 정리 (원본 AppDbContext)
+    board.js                   공지·과제·제출물·포트폴리오 데이터 계층
+    trash.js                   휴지통 (30일 보관 후 정리)
+    services.js                업무 로직 · 학년도/학기 규칙 (원본 StudentService/CounselingService)
+    roles.js                   선생님·학생 구분, 공개 대상 처리
+    links.js                   첨부 링크 해석 (유튜브·드라이브 등)
+    local.js                   이 브라우저에만 두는 값 (화면 설정 · 임시 저장)
+    ui.js                      모달 · 토스트 · 이벤트 · 포맷 유틸리티
+    chart.js                   막대·비율 그래프
     zip.js                     ZIP 읽기·쓰기 (xlsx 읽기와 hwpx 쓰기에 공용)
     sheet.js                   엑셀 · CSV · HTML 표 읽기
     roster.js                  명렬표 해석 (교차표 · 목록형)
     hwpx.js                    한글 문서(.hwpx) 생성기
-    counseling-form.js         진로상담총괄표 서식 구성
-    counseling-journal.js      진로상담일지 서식 구성
-    roles.js                   선생님·학생 구분, 공개 대상 처리
-    board.js                   공지·과제·제출물·포트폴리오 데이터 계층
-    links.js                   첨부 링크 해석 (유튜브·드라이브 등)
-    trash.js                   휴지통 (30일 보관 후 정리)
-    legacy.js                  이전 형식으로 남은 문서 정리
-    drafts.js                  임시 저장
-    chart.js                   막대·비율 그래프
+    counseling-docs.js         진로상담일지 · 진로상담총괄표 서식 구성
     views/
       dashboard.js             대시보드 (선생님)
       students.js              학생 관리 (선생님)
       counseling.js            상담일지 (선생님)
+      statistics.js            통계 (선생님)
+      student-home.js          학생 첫 화면
+      profile-form.js          학생 정보 입력
       notices.js               공지사항 (공용)
       assignments.js           과제 (공용)
       portfolio.js             포트폴리오 (공용)
-      student-home.js          학생 첫 화면
-      profile-form.js          학생 정보 입력
-      post-parts.js            글·첨부 링크 보여주기 (공용 조각)
-      statistics.js            통계 (선생님)
       trash.js                 휴지통 (공용)
+      post-parts.js            글 보여주기 · 글쓰기 창 (공용 조각)
+```
+
+### 계층
+
+```
+views/*  ─ 화면. 데이터 계층을 직접 부르지 않고 아래를 거칩니다.
+  │
+  ├─ services.js ─ 선생님 자료(학생·상담)의 업무 규칙
+  │      └─ store.js  users/{uid}/… (반 문서 · 상담 기록)
+  ├─ board.js ──── 공지·과제·제출물·포트폴리오 (선생님과 학생이 함께 보는 자료)
+  └─ trash.js ──── 두 계층에 흩어진 지운 자료를 한 목록으로 모읍니다.
 ```
 
 ## 원본 C# 프로젝트와의 대응

@@ -1,7 +1,7 @@
 /** 학생 관리 — 검색, 추가, 수정, 비활성화, 명렬표 업로드, 학생 계정 연결 확인. */
 import { studentService } from "../services.js";
 import { profiles, session } from "../board.js";
-import { hasLegacyData, purgeLegacyData } from "../legacy.js";
+import { hasLegacyData, purgeLegacyData } from "../store.js";
 import { TRASH_DAYS } from "../trash.js";
 import { readSpreadsheet, SheetError } from "../sheet.js";
 import { parseRoster, buildImportPlan } from "../roster.js";
@@ -9,6 +9,7 @@ import {
   esc,
   initials,
   emptyState,
+  on,
   openModal,
   confirmDialog,
   showFormError,
@@ -101,44 +102,28 @@ function openStudentForm(data, onSaved) {
       const get = (name) => form.elements[name].value.trim();
 
       const name = get("name");
-      if (!name) return showFormError(form, "이름을 입력해주세요."), false;
+      if (!name) {
+        showFormError(form, "이름을 입력해주세요.");
+        return false;
+      }
 
-      const numeric = [
+      const seat = {};
+      for (const [field, label] of [
         ["schoolYear", "학년도"],
         ["grade", "학년"],
         ["classNo", "반"],
         ["studentNo", "번호"],
-      ];
-
-      const values = {};
-      for (const [field, label] of numeric) {
+      ]) {
         const parsed = Number.parseInt(get(field), 10);
         if (Number.isNaN(parsed)) {
-          return showFormError(form, `${label}을(를) 숫자로 입력해주세요.`), false;
+          showFormError(form, `${label}을(를) 숫자로 입력해주세요.`);
+          return false;
         }
-        values[field] = parsed;
+        seat[field] = parsed;
       }
 
-      const memo = get("memo") || null;
-
-      const result = data
-        ? studentService.update(
-            data.id,
-            values.schoolYear,
-            values.grade,
-            values.classNo,
-            values.studentNo,
-            name,
-            memo
-          )
-        : studentService.add(
-            values.schoolYear,
-            values.grade,
-            values.classNo,
-            values.studentNo,
-            name,
-            memo
-          );
+      const input = { ...seat, name, memo: get("memo") || null };
+      const result = data ? studentService.update(data.id, input) : studentService.add(input);
 
       if (!result.ok) {
         showFormError(form, result.error);
@@ -270,21 +255,22 @@ function openImportPreview(parsed, onSaved) {
 
   const selects = form.querySelectorAll("[data-action-for]");
 
-  selects.forEach((select) =>
-    select.addEventListener("change", () => {
+  on(
+    form,
+    "[data-action-for]",
+    (select) => {
       const row = plan[Number.parseInt(select.dataset.actionFor, 10)];
       if (row) row.action = select.value;
-    })
+    },
+    "change"
   );
 
-  form.querySelectorAll("[data-bulk]").forEach((button) =>
-    button.addEventListener("click", () => {
-      selects.forEach((select) => {
-        select.value = button.dataset.bulk;
-        select.dispatchEvent(new Event("change"));
-      });
-    })
-  );
+  on(form, "[data-bulk]", (button) => {
+    selects.forEach((select) => {
+      select.value = button.dataset.bulk;
+      select.dispatchEvent(new Event("change"));
+    });
+  });
 }
 
 /** 업로드한 파일을 읽어 미리보기를 띄웁니다. */
@@ -428,17 +414,15 @@ function watchLegacy(container, rerender) {
       });
   }
 
-  container.querySelector("[data-purge-legacy]")?.addEventListener("click", async (event) => {
+  on(container, "[data-purge-legacy]", async (button) => {
     const ok = await confirmDialog({
       title: "옛 문서를 정리할까요?",
       message:
         "지금 쓰는 학생 자료(반 문서)는 그대로 두고, 이전 형식으로 남은 문서만 지웁니다. 되돌릴 수 없습니다.",
-      confirmText: "정리",
-      danger: true,
+      confirmLabel: "정리",
     });
     if (!ok) return;
 
-    const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "정리하는 중…";
 
@@ -455,15 +439,18 @@ function watchLegacy(container, rerender) {
   });
 }
 
-export function render(container) {
-  const grade = Number.parseInt(filter.grade, 10);
-  const classNo = Number.parseInt(filter.classNo, 10);
+/** 검색 칸에 적은 숫자. 비어 있거나 숫자가 아니면 조건에서 뺍니다. */
+function numberOrNull(text) {
+  const parsed = Number.parseInt(text, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
-  const items = studentService.getStudents(
-    filter.name,
-    Number.isNaN(grade) ? null : grade,
-    Number.isNaN(classNo) ? null : classNo
-  );
+export function render(container) {
+  const items = studentService.getStudents({
+    name: filter.name,
+    grade: numberOrNull(filter.grade),
+    classNo: numberOrNull(filter.classNo),
+  });
 
   const hasFilter = Boolean(filter.name || filter.grade || filter.classNo);
   const rerender = () => render(container);
@@ -567,56 +554,63 @@ export function render(container) {
     rerender();
   });
 
-  container.querySelectorAll("[data-reset]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      filter.name = filter.grade = filter.classNo = "";
-      rerender();
-    })
-  );
-
-  container.querySelectorAll("[data-add]").forEach((btn) =>
-    btn.addEventListener("click", () => openStudentForm(null, rerender))
-  );
-
-  const fileInput = container.querySelector("[data-roster-file]");
-
-  container.querySelector("[data-upload]")?.addEventListener("click", () => fileInput.click());
-
-  fileInput?.addEventListener("change", async () => {
-    const file = fileInput.files?.[0];
-    // 같은 파일을 다시 골라도 change 가 일어나도록 값을 비웁니다.
-    fileInput.value = "";
-    if (file) await handleRosterFile(file, rerender);
-  });
-
-  container.querySelectorAll("[data-edit]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      const data = studentService.getEditData(btn.dataset.edit);
-      if (data) openStudentForm(data, rerender);
-    })
-  );
-
-  /* --- 일괄 삭제 --- */
-  container.querySelectorAll("[data-select]").forEach((box) =>
-    box.addEventListener("change", () => {
-      if (box.checked) selected.add(box.dataset.select);
-      else selected.delete(box.dataset.select);
-      rerender();
-    })
-  );
-
-  container.querySelector("[data-select-all]")?.addEventListener("change", (event) => {
-    if (event.target.checked) items.forEach((item) => selected.add(item.id));
-    else selected.clear();
+  on(container, "[data-reset]", () => {
+    filter.name = filter.grade = filter.classNo = "";
     rerender();
   });
 
-  container.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+  on(container, "[data-add]", () => openStudentForm(null, rerender));
+
+  const fileInput = container.querySelector("[data-roster-file]");
+
+  on(container, "[data-upload]", () => fileInput.click());
+
+  on(
+    container,
+    "[data-roster-file]",
+    async () => {
+      const file = fileInput.files?.[0];
+      // 같은 파일을 다시 골라도 change 가 일어나도록 값을 비웁니다.
+      fileInput.value = "";
+      if (file) await handleRosterFile(file, rerender);
+    },
+    "change"
+  );
+
+  on(container, "[data-edit]", (button) => {
+    const data = studentService.getEditData(button.dataset.edit);
+    if (data) openStudentForm(data, rerender);
+  });
+
+  /* --- 일괄 삭제 --- */
+  on(
+    container,
+    "[data-select]",
+    (box) => {
+      if (box.checked) selected.add(box.dataset.select);
+      else selected.delete(box.dataset.select);
+      rerender();
+    },
+    "change"
+  );
+
+  on(
+    container,
+    "[data-select-all]",
+    (box) => {
+      if (box.checked) items.forEach((item) => selected.add(item.id));
+      else selected.clear();
+      rerender();
+    },
+    "change"
+  );
+
+  on(container, "[data-bulk-clear]", () => {
     selected.clear();
     rerender();
   });
 
-  container.querySelector("[data-bulk-delete]")?.addEventListener("click", async () => {
+  on(container, "[data-bulk-delete]", async () => {
     const names = chosen
       .map((id) => items.find((item) => item.id === id)?.name)
       .filter(Boolean);
@@ -647,23 +641,20 @@ export function render(container) {
     }
   });
 
-  container.querySelectorAll("[data-deactivate]").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.deactivate;
-      const student = items.find((s) => s.id === id);
-      if (!student) return;
+  on(container, "[data-deactivate]", async (button) => {
+    const id = button.dataset.deactivate;
+    const student = items.find((s) => s.id === id);
+    if (!student) return;
 
-      const ok = await confirmDialog({
-        title: "학생 비활성화",
-        message: `${student.name} 학생을 비활성화할까요?\n상담 기록은 삭제되지 않습니다.`,
-        confirmLabel: "비활성화",
-      });
+    const ok = await confirmDialog({
+      title: "학생 비활성화",
+      message: `${student.name} 학생을 비활성화할까요?\n상담 기록은 삭제되지 않습니다.`,
+      confirmLabel: "비활성화",
+    });
+    if (!ok) return;
 
-      if (!ok) return;
-
-      studentService.deactivate(id);
-      toast(`${student.name} 학생을 비활성화했습니다.`);
-      rerender();
-    })
-  );
+    studentService.deactivate(id);
+    toast(`${student.name} 학생을 비활성화했습니다.`);
+    rerender();
+  });
 }

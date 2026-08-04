@@ -1,12 +1,60 @@
 /**
- * 업무 로직 계층.
- * 원본의 CareerCounseling.Wpf/Services/StudentService.cs,
- * CounselingService.cs 를 그대로 옮긴 것입니다.
+ * 업무 로직 계층 — 화면과 데이터 계층 사이에서 목록을 다듬고 규칙을 지킵니다.
+ *
+ * 선생님 화면(대시보드·학생 관리·상담일지·통계)은 store.js 를 직접 부르지 않고
+ * 모두 이 파일을 거칩니다. 정렬 순서와 학년도 규칙이 화면마다 달라지지 않도록
+ * 여기 한 곳에만 적어 둡니다.
  */
 import { students, sessions, newId } from "./store.js";
 import { trashSession, trashStudents } from "./trash.js";
-import { JOURNAL_TOPICS, topicsToCategory } from "./counseling-journal.js";
+import { JOURNAL_TOPICS, topicsToCategory } from "./counseling-docs.js";
 
+/* =========================================================
+   학년도 · 학기
+
+   3월부터 다음 해 2월까지가 한 학년도입니다.
+   1·2월은 지난 학년도의 2학기에 속합니다.
+   ========================================================= */
+/** 그 날짜가 속한 학년도. */
+export function schoolYearOf(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getMonth() + 1 >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+}
+
+/** 상담 기록이 그 학년도에 속하는지. */
+export const inSchoolYear = (session, year) => schoolYearOf(session.sessionDate) === year;
+
+/**
+ * 오늘이 속한 학년도·학기와 그 기간.
+ * 내보내기 창의 기본값으로 씁니다.
+ *
+ * @returns {{ year: number, term: 1|2, from: string, to: string }}
+ */
+export function currentTerm(today = new Date()) {
+  const month = today.getMonth() + 1;
+  const year = schoolYearOf(today);
+
+  return month >= 3 && month <= 8
+    ? { year, term: 1, from: `${year}-03-01`, to: `${year}-08-31` }
+    : { year, term: 2, from: `${year}-09-01`, to: `${year + 1}-02-28` };
+}
+
+/* =========================================================
+   정렬
+   ========================================================= */
+const byDate = (a, b) => new Date(a.sessionDate) - new Date(b.sessionDate);
+const byCreated = (a, b) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""));
+
+/** 오래된 상담부터. */
+const oldestFirst = (a, b) => byDate(a, b) || byCreated(a, b);
+
+/** 최근 상담부터. */
+const newestFirst = (a, b) => oldestFirst(b, a);
+
+/* =========================================================
+   StudentService
+   ========================================================= */
 /**
  * 학생 한 명이 곧 한 자리입니다.
  * 반 문서 안에 들어 있어 학년도·학년·반·번호가 학생 행에 함께 붙어 옵니다.
@@ -35,23 +83,32 @@ function toListItem(student) {
   };
 }
 
-/* =========================================================
-   StudentService
-   ========================================================= */
+/** 자리(학년도·학년·반·번호)만 뽑아냅니다. */
+const seatOf = ({ schoolYear, grade, classNo, studentNo }) => ({
+  schoolYear,
+  grade,
+  classNo,
+  studentNo,
+});
+
 export const studentService = {
-  /** 활성 학생 목록을 조건에 맞게 조회합니다. */
-  getStudents(nameKeyword, grade, classNo) {
-    let result = students.all().filter((s) => s.isActive);
+  /**
+   * 활성 학생 목록을 조건에 맞게 조회합니다.
+   * @param {{ name?: string, grade?: number|null, classNo?: number|null }} [filter]
+   */
+  getStudents({ name = "", grade = null, classNo = null } = {}) {
+    const keyword = name.trim().toLowerCase();
 
-    if (nameKeyword && nameKeyword.trim()) {
-      const keyword = nameKeyword.trim().toLowerCase();
-      result = result.filter((s) => s.name.toLowerCase().includes(keyword));
-    }
-
-    if (grade != null) result = result.filter((s) => s.grade === grade);
-    if (classNo != null) result = result.filter((s) => s.classNo === classNo);
-
-    const items = result.map(toListItem);
+    const items = students
+      .all()
+      .filter(
+        (s) =>
+          s.isActive &&
+          (!keyword || s.name.toLowerCase().includes(keyword)) &&
+          (grade == null || s.grade === grade) &&
+          (classNo == null || s.classNo === classNo)
+      )
+      .map(toListItem);
 
     // 최신 학년도 내림차순 → 학년/반/번호 오름차순 → 이름 순
     return items.sort(
@@ -64,9 +121,14 @@ export const studentService = {
     );
   },
 
+  /** 통계 화면처럼 자리 정보가 필요한 곳에서 쓰는 원본 목록. */
+  getAll() {
+    return students.all();
+  },
+
   /** 같은 학년도/학년/반/번호 자리에 이미 있는 학생을 찾습니다. */
-  findSeat(key) {
-    const student = students.findSeat(key);
+  findSeat(seat) {
+    const student = students.findSeat(seat);
     return student ? { id: student.id, name: student.name } : null;
   },
 
@@ -107,15 +169,46 @@ export const studentService = {
     };
   },
 
-  add(schoolYear, grade, classNo, studentNo, name, memo, gender = null) {
-    if (students.findSeat({ schoolYear, grade, classNo, studentNo })) {
+  /**
+   * 학생 한 명을 등록합니다.
+   * @param {{ schoolYear, grade, classNo, studentNo, name, memo?, gender? }} input
+   * @returns {{ ok: boolean, error: string|null }}
+   */
+  add(input) {
+    const seat = seatOf(input);
+
+    if (students.findSeat(seat)) {
       return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
     }
 
     students.create(
-      { schoolYear, grade, classNo, studentNo },
-      students.fields({ name, gender, memo })
+      seat,
+      students.fields({
+        name: input.name,
+        gender: input.gender ?? null,
+        memo: input.memo ?? null,
+      })
     );
+
+    return { ok: true, error: null };
+  },
+
+  /**
+   * 학생 정보를 고칩니다. 자리가 바뀌면 다른 반 문서로 옮깁니다.
+   * @param {string} id
+   * @param {{ schoolYear, grade, classNo, studentNo, name, memo? }} input
+   */
+  update(id, input) {
+    if (!students.find(id)) return { ok: false, error: "학생을 찾을 수 없습니다." };
+
+    const seat = seatOf(input);
+    const seated = students.findSeat(seat);
+
+    if (seated && seated.id !== id) {
+      return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
+    }
+
+    students.move(id, seat, { name: input.name, memo: input.memo ?? null });
 
     return { ok: true, error: null };
   },
@@ -136,12 +229,7 @@ export const studentService = {
       if (row.action === "add") {
         changes.push({
           id: newId(),
-          seat: {
-            schoolYear: row.schoolYear,
-            grade: row.grade,
-            classNo: row.classNo,
-            studentNo: row.studentNo,
-          },
+          seat: seatOf(row),
           fields: students.fields({ name: row.name, gender: row.gender, memo: row.memo }),
         });
         added += 1;
@@ -160,25 +248,9 @@ export const studentService = {
     return { added, updated, skipped: rows.length - added - updated };
   },
 
-  update(id, schoolYear, grade, classNo, studentNo, name, memo) {
-    const student = students.find(id);
-    if (!student) return { ok: false, error: "학생을 찾을 수 없습니다." };
-
-    const seated = students.findSeat({ schoolYear, grade, classNo, studentNo });
-    if (seated && seated.id !== id) {
-      return { ok: false, error: "이미 같은 학년도/학년/반/번호의 학생이 있습니다." };
-    }
-
-    students.move(id, { schoolYear, grade, classNo, studentNo }, { name, memo });
-
-    return { ok: true, error: null };
-  },
-
   /** 학생을 비활성화합니다. 목록에서 빠지지만 자료는 그대로 남습니다. */
   deactivate(id) {
-    const student = students.find(id);
-    if (!student) return;
-
+    if (!students.find(id)) return;
     students.update(id, { isActive: false });
   },
 
@@ -236,17 +308,29 @@ function toSessionFields({
   };
 }
 
+/** 서식과 내보내기에 함께 실을 학생 정보(학생 행에서 필요한 칸만 추립니다). */
+export const studentInfo = (student) =>
+  student
+    ? {
+        name: student.name,
+        grade: student.grade ?? null,
+        classNo: student.classNo ?? null,
+        studentNo: student.studentNo ?? null,
+      }
+    : null;
+
 export const counselingService = {
   /** 학생 한 명의 상담 기록을 최신순으로 조회합니다. */
   getForStudent(studentId) {
     return sessions
       .forStudent(studentId)
       .slice()
-      .sort(
-        (a, b) =>
-          new Date(b.sessionDate) - new Date(a.sessionDate) ||
-          (b.sessionNo ?? 0) - (a.sessionNo ?? 0)
-      );
+      .sort((a, b) => byDate(b, a) || (b.sessionNo ?? 0) - (a.sessionNo ?? 0));
+  },
+
+  /** 통계 화면이 쓰는 전체 목록. */
+  getAll() {
+    return sessions.all();
   },
 
   /** 최근 상담 기록 count 건을 학생 정보와 함께 조회합니다. */
@@ -254,16 +338,9 @@ export const counselingService = {
     return sessions
       .all()
       .slice()
-      .sort(
-        (a, b) =>
-          new Date(b.sessionDate) - new Date(a.sessionDate) ||
-          String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""))
-      )
+      .sort(newestFirst)
       .slice(0, count)
-      .map((session) => ({
-        ...session,
-        student: students.find(session.studentId),
-      }));
+      .map((session) => ({ ...session, student: students.find(session.studentId) }));
   },
 
   /**
@@ -289,7 +366,7 @@ export const counselingService = {
 
   /**
    * 기간 안의 상담 기록을 학생 정보와 함께 날짜순으로 돌려줍니다.
-   * 진로상담총괄표 내보내기에 씁니다.
+   * 진로상담일지·총괄표 내보내기에 씁니다.
    *
    * @param {string} from yyyy-MM-dd (포함)
    * @param {string} to   yyyy-MM-dd (포함)
@@ -304,32 +381,16 @@ export const counselingService = {
         const time = new Date(session.sessionDate).getTime();
         return !Number.isNaN(time) && time >= start && time <= end;
       })
-      .sort(
-        (a, b) =>
-          new Date(a.sessionDate) - new Date(b.sessionDate) ||
-          String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
-      )
-      .map((session) => {
-        const student = students.find(session.studentId);
-
-        return {
-          ...session,
-          student: student
-            ? {
-                name: student.name,
-                grade: student.grade ?? null,
-                classNo: student.classNo ?? null,
-                studentNo: student.studentNo ?? null,
-              }
-            : null,
-        };
-      });
+      .sort(oldestFirst)
+      .map((session) => ({
+        ...session,
+        student: studentInfo(students.find(session.studentId)),
+      }));
   },
 
   /** 상담 기록을 고칩니다. */
   update(id, record) {
-    const session = sessions.find(id);
-    if (!session) return { ok: false, error: "상담 기록을 찾을 수 없습니다." };
+    if (!sessions.find(id)) return { ok: false, error: "상담 기록을 찾을 수 없습니다." };
 
     sessions.update(id, {
       sessionDate: record.date,

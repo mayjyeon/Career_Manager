@@ -26,7 +26,7 @@ export function youtubeId(url) {
 }
 
 /** 구글 드라이브 주소에서 파일 번호를 뽑습니다. */
-export function driveId(url) {
+function driveId(url) {
   const match = /drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?(?:.*&)?id=)([\w-]{10,})/.exec(url);
   return match ? match[1] : null;
 }
@@ -72,7 +72,7 @@ const ICONS = {
 export const linkIcon = (url) => ICONS[linkKind(url)] ?? ICONS.link;
 
 /** 제목을 안 적었을 때 주소에서 보기 좋은 이름을 만듭니다. */
-export function guessLabel(url) {
+function guessLabel(url) {
   if (youtubeId(url)) return "유튜브 영상";
   if (driveId(url)) return "구글 드라이브 파일";
 

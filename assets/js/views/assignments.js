@@ -1,18 +1,15 @@
 /** 과제 — 선생님이 내고 학생이 제출합니다. */
 import { assignments, profiles, session, submissions } from "../board.js";
-import { attachDraft } from "../drafts.js";
-import { parseLinks } from "../links.js";
 import { TEACHER, describeTargets, formatTargets, matchesTargets, parseTargets } from "../roles.js";
-import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
 import {
-  clearFormError,
-  confirmDialog,
-  emptyState,
-  esc,
-  openModal,
-  showFormError,
-  toast,
-} from "../ui.js";
+  linkField,
+  openPostForm,
+  profileSnapshot,
+  renderBody,
+  renderLinks,
+  renderPostMeta,
+} from "./post-parts.js";
+import { confirmDialog, emptyState, esc, on, toast } from "../ui.js";
 
 export const meta = { id: "assignments", icon: "📝", title: "과제", needs: ["submissions"] };
 
@@ -69,80 +66,43 @@ function assignmentFormBody(assignment) {
 }
 
 function openAssignmentForm(assignment, onSaved) {
-  let draft = null;
-
-  const created = openModal({
+  openPostForm({
     title: assignment ? "과제 수정" : "과제 내기",
     body: assignmentFormBody(assignment),
-    actions: [
-      { label: "취소", variant: "secondary", value: "cancel" },
-      { label: "저장", variant: "primary", value: "submit" },
-    ],
-    onAction: async (action, form) => {
-      if (action !== "submit") return;
-
-      clearFormError(form);
-      const get = (name) => form.elements[name].value.trim();
-
+    draftKey: `assignment:${assignment?.id ?? "new"}`,
+    draftFields: ["title", "body", "dueDate", "targets", "links"],
+    read(get, links) {
       const title = get("title");
-      if (!title) {
-        showFormError(form, "제목을 입력해주세요.");
-        return false;
-      }
+      if (!title) return { ok: false, error: "제목을 입력해주세요." };
 
       const targets = parseTargets(get("targets"));
-      if (!targets.ok) {
-        showFormError(form, targets.error);
-        return false;
-      }
+      if (!targets.ok) return { ok: false, error: targets.error };
 
-      const links = parseLinks(get("links"));
-      if (!links.ok) {
-        showFormError(form, links.error);
-        return false;
-      }
-
-      const fields = {
-        title,
-        body: get("body"),
-        dueDate: get("dueDate") || null,
-        targets: targets.targets,
-        links: links.links,
+      return {
+        ok: true,
+        fields: {
+          title,
+          body: get("body"),
+          dueDate: get("dueDate") || null,
+          targets: targets.targets,
+          links,
+        },
       };
-
-      try {
-        if (assignment) await assignments.update(assignment.id, fields);
-        else await assignments.add({ ...fields, authorUid: session.uid() });
-
-        draft?.done();
-        toast(assignment ? "과제를 수정했습니다." : "과제를 냈습니다.", "success");
-        onSaved();
-      } catch (error) {
-        showFormError(form, error?.message ?? "저장하지 못했습니다.");
-        return false;
-      }
-
-      return true;
     },
+    save: (fields) =>
+      assignment
+        ? assignments.update(assignment.id, fields)
+        : assignments.add({ ...fields, authorUid: session.uid() }),
+    done: assignment ? "과제를 수정했습니다." : "과제를 냈습니다.",
+    onSaved,
   });
-
-  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
-  draft = attachDraft(created, `assignment:${assignment?.id ?? "new"}`, [
-    "title",
-    "body",
-    "dueDate",
-    "targets",
-    "links",
-  ]);
 }
 
 /* =========================================================
    제출하기 (학생)
    ========================================================= */
 function openSubmissionForm(assignment, mine, onSaved) {
-  let draft = null;
-
-  const created = openModal({
+  openPostForm({
     title: mine ? "제출물 수정" : "과제 제출",
     subtitle: assignment.title,
     body: `
@@ -152,60 +112,30 @@ function openSubmissionForm(assignment, mine, onSaved) {
                   placeholder="과제 내용을 적거나, 아래에 파일 링크를 붙여주세요.">${esc(mine?.text ?? "")}</textarea>
       </div>
       ${linkField(mine?.links ?? [], { label: "제출 파일 링크" })}`,
-    actions: [
-      { label: "취소", variant: "secondary", value: "cancel" },
-      { label: mine ? "수정" : "제출", variant: "primary", value: "submit" },
-    ],
-    onAction: async (action, form) => {
-      if (action !== "submit") return;
-
-      clearFormError(form);
-      const text = form.elements.text.value.trim();
-
-      const links = parseLinks(form.elements.links.value.trim());
-      if (!links.ok) {
-        showFormError(form, links.error);
-        return false;
+    draftKey: `submission:${assignment.id}`,
+    draftFields: ["text", "links"],
+    submitLabel: mine ? "수정" : "제출",
+    read(get, links) {
+      const text = get("text");
+      if (!text && links.length === 0) {
+        return { ok: false, error: "내용을 적거나 링크를 하나 이상 붙여주세요." };
       }
 
-      if (!text && links.links.length === 0) {
-        showFormError(form, "내용을 적거나 링크를 하나 이상 붙여주세요.");
-        return false;
-      }
-
-      const profile = profiles.mine();
-      const fields = {
-        assignmentId: assignment.id,
-        text,
-        links: links.links,
-        // 선생님 화면에서 누가 냈는지 바로 알 수 있도록 이름을 함께 남깁니다.
-        profile: profile
-          ? {
-              name: profile.name,
-              grade: profile.grade,
-              classNo: profile.classNo,
-              studentNo: profile.studentNo,
-            }
-          : null,
+      return {
+        ok: true,
+        fields: {
+          assignmentId: assignment.id,
+          text,
+          links,
+          // 선생님 화면에서 누가 냈는지 바로 알 수 있도록 이름을 함께 남깁니다.
+          profile: profileSnapshot(),
+        },
       };
-
-      try {
-        if (mine) await submissions.update(mine.id, fields);
-        else await submissions.add(fields);
-
-        draft?.done();
-        toast(mine ? "제출물을 수정했습니다." : "과제를 제출했습니다.", "success");
-        onSaved();
-      } catch (error) {
-        showFormError(form, error?.message ?? "제출하지 못했습니다.");
-        return false;
-      }
-
-      return true;
     },
+    save: (fields) => (mine ? submissions.update(mine.id, fields) : submissions.add(fields)),
+    done: mine ? "제출물을 수정했습니다." : "과제를 제출했습니다.",
+    onSaved,
   });
-
-  draft = attachDraft(created, `submission:${assignment.id}`, ["text", "links"]);
 }
 
 /* =========================================================
@@ -358,74 +288,62 @@ export function render(container) {
     }`;
 
   /* --- 이벤트 --- */
-  container.querySelectorAll("[data-add]").forEach((button) =>
-    button.addEventListener("click", () => openAssignmentForm(null, rerender))
-  );
+  on(container, "[data-add]", () => openAssignmentForm(null, rerender));
 
-  container.querySelectorAll("[data-toggle]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const id = button.dataset.toggle;
-      if (expanded.has(id)) expanded.delete(id);
-      else expanded.add(id);
+  on(container, "[data-toggle]", (button) => {
+    const id = button.dataset.toggle;
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+    rerender();
+  });
+
+  on(container, "[data-edit]", (button) => {
+    const assignment = assignments.find(button.dataset.edit);
+    if (assignment) openAssignmentForm(assignment, rerender);
+  });
+
+  on(container, "[data-remove]", async (button) => {
+    const assignment = assignments.find(button.dataset.remove);
+    if (!assignment) return;
+
+    const count = submissions.forAssignment(assignment.id).length;
+    const ok = await confirmDialog({
+      title: "과제 삭제",
+      message:
+        `‘${assignment.title}’ 과제를 삭제할까요?` +
+        (count ? `\n제출물 ${count}건은 남아 있으니 필요하면 먼저 확인해주세요.` : ""),
+      confirmLabel: "삭제",
+    });
+    if (!ok) return;
+
+    try {
+      await assignments.remove(assignment.id);
+      toast("과제를 삭제했습니다.");
       rerender();
-    })
-  );
+    } catch {
+      // 오류 메시지는 board.js 가 토스트로 알립니다.
+    }
+  });
 
-  container.querySelectorAll("[data-edit]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const assignment = assignments.find(button.dataset.edit);
-      if (assignment) openAssignmentForm(assignment, rerender);
-    })
-  );
+  on(container, "[data-submit]", (button) => {
+    const assignment = assignments.find(button.dataset.submit);
+    if (assignment) openSubmissionForm(assignment, submissions.mine(assignment.id), rerender);
+  });
 
-  container.querySelectorAll("[data-remove]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const assignment = assignments.find(button.dataset.remove);
-      if (!assignment) return;
+  on(container, "[data-cancel]", async (button) => {
+    const ok = await confirmDialog({
+      title: "제출 취소",
+      message: "제출물을 지울까요? 마감 전이라면 다시 제출할 수 있습니다.",
+      confirmLabel: "제출 취소",
+    });
+    if (!ok) return;
 
-      const count = submissions.forAssignment(assignment.id).length;
-      const ok = await confirmDialog({
-        title: "과제 삭제",
-        message:
-          `‘${assignment.title}’ 과제를 삭제할까요?` +
-          (count ? `\n제출물 ${count}건은 남아 있으니 필요하면 먼저 확인해주세요.` : ""),
-        confirmLabel: "삭제",
-      });
-      if (!ok) return;
-
-      try {
-        await assignments.remove(assignment.id);
-        toast("과제를 삭제했습니다.");
-        rerender();
-      } catch {
-        // 오류 메시지는 board.js 가 토스트로 알립니다.
-      }
-    })
-  );
-
-  container.querySelectorAll("[data-submit]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const assignment = assignments.find(button.dataset.submit);
-      if (assignment) openSubmissionForm(assignment, submissions.mine(assignment.id), rerender);
-    })
-  );
-
-  container.querySelectorAll("[data-cancel]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const ok = await confirmDialog({
-        title: "제출 취소",
-        message: "제출물을 지울까요? 마감 전이라면 다시 제출할 수 있습니다.",
-        confirmLabel: "제출 취소",
-      });
-      if (!ok) return;
-
-      try {
-        await submissions.remove(button.dataset.cancel);
-        toast("제출을 취소했습니다.");
-        rerender();
-      } catch {
-        // 오류 메시지는 board.js 가 토스트로 알립니다.
-      }
-    })
-  );
+    try {
+      await submissions.remove(button.dataset.cancel);
+      toast("제출을 취소했습니다.");
+      rerender();
+    } catch {
+      // 오류 메시지는 board.js 가 토스트로 알립니다.
+    }
+  });
 }

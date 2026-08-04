@@ -29,14 +29,16 @@
  */
 import {
   collection,
-  deleteDoc,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
+  query,
   setDoc,
   updateDoc,
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
-import { firebaseContext } from "./firebase.js";
+import { describeFirestoreError, firebaseContext } from "./firebase.js";
 
 const COLLECTIONS = ["classes", "sessions"];
 
@@ -63,14 +65,7 @@ function notifyChange() {
 }
 
 function notifyError(error, fallback) {
-  const message =
-    error?.code === "permission-denied"
-      ? "데이터 접근 권한이 없습니다. Firestore 보안 규칙을 확인해주세요."
-      : error?.code === "unavailable"
-        ? "네트워크에 연결할 수 없어 저장하지 못했습니다."
-        : fallback;
-
-  errorHandler?.(message, error);
+  errorHandler?.(describeFirestoreError(error, fallback), error);
 }
 
 /**
@@ -151,7 +146,7 @@ export function newId() {
    이 파일 밖으로 나가지 않습니다.
    ========================================================= */
 /** 반 문서를 가리키는 이름. 문서 번호를 그대로 씁니다. */
-export const classKeyOf = ({ schoolYear, grade, classNo }) => `${schoolYear}-${grade}-${classNo}`;
+const classKeyOf = ({ schoolYear, grade, classNo }) => `${schoolYear}-${grade}-${classNo}`;
 
 /** 학생 행에는 없고 반 문서에만 있는 값. */
 const SEAT_KEYS = ["schoolYear", "grade", "classNo", "classKey"];
@@ -256,6 +251,24 @@ function putRow(seat, row) {
 /** 일괄 쓰기는 한 번에 500개까지라 나누어 보냅니다. */
 const LIMIT = 450;
 
+/** 목록을 일괄 쓰기 한도에 맞게 잘라 줍니다. */
+function* chunks(list, size = LIMIT) {
+  for (let i = 0; i < list.length; i += size) yield list.slice(i, i + size);
+}
+
+/**
+ * 일괄 쓰기를 나누어 보냅니다.
+ * @param {Array} list 처리할 항목
+ * @param {(batch: object, item: any) => void} add 항목 하나를 batch 에 얹는 방법
+ */
+async function commitInChunks(list, add) {
+  for (const chunk of chunks(list)) {
+    const batch = writeBatch(firebaseContext().db);
+    for (const item of chunk) add(batch, item);
+    await batch.commit();
+  }
+}
+
 /** Firestore 쓰기를 보내고 실패하면 사용자에게 알립니다. */
 function send(promise) {
   promise.catch((error) => notifyError(error, "저장하지 못했습니다."));
@@ -268,33 +281,27 @@ async function commitClasses(keys) {
 
   const emptied = [];
 
-  for (let i = 0; i < list.length; i += LIMIT) {
-    const batch = writeBatch(firebaseContext().db);
+  await commitInChunks(list, (batch, key) => {
+    const ref = doc(collectionRef("classes"), key);
+    const cls = findClass(key);
 
-    for (const key of list.slice(i, i + LIMIT)) {
-      const ref = doc(collectionRef("classes"), key);
-      const cls = findClass(key);
-
-      if (!cls || cls.students.length === 0) {
-        batch.delete(ref);
-        emptied.push(key);
-        continue;
-      }
-
-      // 번호 순으로 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
-      cls.students.sort((a, b) => (a.studentNo ?? 0) - (b.studentNo ?? 0));
-
-      batch.set(ref, {
-        schoolYear: cls.schoolYear,
-        grade: cls.grade,
-        classNo: cls.classNo,
-        students: cls.students,
-        updatedAt: new Date().toISOString(),
-      });
+    if (!cls || cls.students.length === 0) {
+      batch.delete(ref);
+      emptied.push(key);
+      return;
     }
 
-    await batch.commit();
-  }
+    // 번호 순으로 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
+    cls.students.sort((a, b) => (a.studentNo ?? 0) - (b.studentNo ?? 0));
+
+    batch.set(ref, {
+      schoolYear: cls.schoolYear,
+      grade: cls.grade,
+      classNo: cls.classNo,
+      students: cls.students,
+      updatedAt: new Date().toISOString(),
+    });
+  });
 
   if (emptied.length) {
     cache.classes = cache.classes.filter((cls) => !emptied.includes(cls.id));
@@ -316,7 +323,7 @@ async function commitClasses(keys) {
  * }>} changes
  * @returns {Promise<void>}
  */
-export async function saveStudents(changes) {
+async function saveStudents(changes) {
   const dirty = new Set();
 
   // 색인은 한 번만 만들고 바뀐 만큼 따라 고칩니다.
@@ -410,23 +417,19 @@ function patchSession(id, fields) {
  * @param {Array<{ id: string, fields: object, mode?: "set"|"update" }>} operations
  */
 export async function commitSessions(operations) {
-  for (let i = 0; i < operations.length; i += LIMIT) {
-    const chunk = operations.slice(i, i + LIMIT);
-    const batch = writeBatch(firebaseContext().db);
+  if (operations.length === 0) return;
 
-    for (const operation of chunk) {
-      const ref = doc(collectionRef("sessions"), operation.id);
-
-      // 화면에 곧바로 보이도록 로컬 캐시를 먼저 갱신합니다.
-      applyLocalSession({ id: operation.id, ...operation.fields });
-
-      if (operation.mode === "update") batch.update(ref, operation.fields);
-      else batch.set(ref, operation.fields);
-    }
-
-    notifyChange();
-    await batch.commit();
+  // 화면에 곧바로 보이도록 로컬 캐시를 먼저 갱신합니다.
+  for (const operation of operations) {
+    applyLocalSession({ id: operation.id, ...operation.fields });
   }
+  notifyChange();
+
+  await commitInChunks(operations, (batch, operation) => {
+    const ref = doc(collectionRef("sessions"), operation.id);
+    if (operation.mode === "update") batch.update(ref, operation.fields);
+    else batch.set(ref, operation.fields);
+  });
 }
 
 /* =========================================================
@@ -469,13 +472,19 @@ export async function purge(name, ids) {
     return;
   }
 
-  for (const id of asList(ids)) {
+  const list = asList(ids);
+
+  for (const id of list) {
     const at = cache.sessions.findIndex((row) => row.id === id);
     if (at >= 0) cache.sessions.splice(at, 1);
-    await deleteDoc(doc(collectionRef("sessions"), id));
   }
 
+  invalidateSessions();
   notifyChange();
+
+  await commitInChunks(list, (batch, id) =>
+    batch.delete(doc(collectionRef("sessions"), id))
+  );
 }
 
 /** 휴지통에 있는 자료. */
@@ -560,36 +569,76 @@ export const sessions = {
   update(id, fields) {
     patchSession(id, { ...fields, updatedAt: new Date().toISOString() });
   },
-  add({
-    studentId,
-    sessionDate,
-    sessionNo,
-    category,
-    topics = [],
-    topicOther = null,
-    meetingType = null,
-    period = null,
-    subject = null,
-    durationMinutes = null,
-    content,
-    intervention = null,
-  }) {
+  /** 상담 기록의 빈 칸은 undefined 가 아니라 null 로 채웁니다(Firestore 는 undefined 를 받지 않습니다). */
+  add(record) {
     const now = new Date().toISOString();
+
     return insertSession({
-      studentId,
-      sessionDate,
-      sessionNo,
-      category,
-      topics,
-      topicOther,
-      meetingType,
-      period,
-      subject,
-      durationMinutes,
-      content,
-      intervention,
+      topics: [],
+      topicOther: null,
+      meetingType: null,
+      period: null,
+      subject: null,
+      durationMinutes: null,
+      intervention: null,
+      ...clean(record),
       createdAt: now,
       updatedAt: now,
     });
   },
 };
+
+/* =========================================================
+   이전 형식으로 남은 문서 정리
+
+   예전에는 학생 한 명이 문서 하나(students)였고 소속이 또 다른 문서(schoolYears)였습니다.
+   지금은 한 반이 문서 하나(classes)입니다. 새 구조로 옮긴 뒤에도 옛 문서는
+   데이터베이스에 그대로 남아 있는데, 앱이 더는 구독하지 않으므로
+   읽기 비용은 들지 않지만 콘솔에서 보면 헷갈립니다.
+
+   정리가 끝나면 firestore.rules 에서 옛 컬렉션 허용을 빼도 됩니다.
+   ========================================================= */
+/** 지금은 쓰지 않는 옛 컬렉션. */
+const OLD_COLLECTIONS = ["students", "schoolYears"];
+
+const oldRef = (uid, name) => collection(firebaseContext().db, "users", uid, name);
+
+/**
+ * 옛 문서가 남아 있는지 확인합니다.
+ *
+ * 개수를 세면 문서 수만큼 읽기가 발생하므로 컬렉션마다 한 건만 꺼내 봅니다.
+ * 읽기는 최대 2건입니다.
+ *
+ * @param {string} uid
+ * @returns {Promise<boolean>}
+ */
+export async function hasLegacyData(uid) {
+  for (const name of OLD_COLLECTIONS) {
+    const snapshot = await getDocs(query(oldRef(uid, name), limit(1)));
+    if (!snapshot.empty) return true;
+  }
+  return false;
+}
+
+/**
+ * 옛 문서를 모두 지웁니다.
+ *
+ * 지우려면 어떤 문서가 있는지 먼저 읽어야 해서 문서 수만큼 읽기가 한 번 발생하고,
+ * 삭제도 쓰기로 계산됩니다. 900명이면 읽기 약 1,800건 + 쓰기 약 1,800건이며
+ * 한 번만 치르면 됩니다(하루 무료 한도는 읽기 5만 · 쓰기 2만).
+ *
+ * @param {string} uid
+ * @returns {Promise<number>} 지운 문서 수
+ */
+export async function purgeLegacyData(uid) {
+  const refs = [];
+
+  for (const name of OLD_COLLECTIONS) {
+    const snapshot = await getDocs(oldRef(uid, name));
+    for (const document of snapshot.docs) refs.push(document.ref);
+  }
+
+  await commitInChunks(refs, (batch, ref) => batch.delete(ref));
+
+  return refs.length;
+}

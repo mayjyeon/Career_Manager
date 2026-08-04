@@ -2,8 +2,9 @@
  * 애플리케이션 셸 — 로그인 상태 관리, 사이드바 내비게이션, 화면 전환.
  * 원본의 MainWindow / MainViewModel 에 해당합니다.
  */
-import { initFirebase, FirebaseConfigError } from "./firebase.js";
+import { describeFirestoreError, initFirebase, FirebaseConfigError } from "./firebase.js";
 import { signInWithGoogle, signOutUser, watchUser } from "./auth.js";
+import { readText, writeText } from "./local.js";
 import { startSync, stopSync } from "./store.js";
 import {
   ensureSubscribed,
@@ -13,7 +14,7 @@ import {
   stopBoardSync,
 } from "./board.js";
 import { TEACHER, roleOf } from "./roles.js";
-import { closeModal, esc, toast } from "./ui.js";
+import { closeModal, esc, on, toast } from "./ui.js";
 import * as dashboard from "./views/dashboard.js";
 import * as students from "./views/students.js";
 import * as counseling from "./views/counseling.js";
@@ -68,7 +69,6 @@ const elements = {
 
 let currentId = null;
 let signedIn = false;
-let currentRole = null;
 
 /* =========================================================
    화면 전환(로그인 · 로딩 · 본문)
@@ -95,21 +95,11 @@ const THEME_KEY = "career-manager.theme";
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  try {
-    localStorage.setItem(THEME_KEY, theme);
-  } catch {
-    /* 저장할 수 없으면 이번 세션에만 적용됩니다. */
-  }
+  writeText(THEME_KEY, theme);
 }
 
 function initTheme() {
-  let saved = null;
-  try {
-    saved = localStorage.getItem(THEME_KEY);
-  } catch {
-    /* 무시 */
-  }
-
+  const saved = readText(THEME_KEY);
   const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
   applyTheme(saved ?? (prefersDark ? "dark" : "light"));
 
@@ -149,9 +139,7 @@ function renderNav() {
     )
     .join("");
 
-  elements.nav.querySelectorAll("[data-view]").forEach((btn) =>
-    btn.addEventListener("click", () => navigate(btn.dataset.view))
-  );
+  on(elements.nav, "[data-view]", (button) => navigate(button.dataset.view));
 }
 
 function markActive(id) {
@@ -177,12 +165,7 @@ function renderCurrentView() {
 
     ensureSubscribed(needs).then(scheduleRerender, (error) => {
       elements.view.innerHTML = "";
-      toast(
-        error?.code === "permission-denied"
-          ? "자료에 접근할 권한이 없습니다. Firestore 보안 규칙을 다시 배포해주세요."
-          : "자료를 불러오지 못했습니다.",
-        "error"
-      );
+      toast(describeFirestoreError(error, "자료를 불러오지 못했습니다."), "error");
     });
     return;
   }
@@ -337,7 +320,6 @@ async function handleUserChange(user) {
   if (!user) {
     signedIn = false;
     currentId = null;
-    currentRole = null;
     stopSync();
     stopBoardSync();
     closeModal();
@@ -353,9 +335,7 @@ async function handleUserChange(user) {
   } catch (error) {
     if (token !== sessionToken) return;
     showAuthError(
-      error?.code === "permission-denied"
-        ? "데이터 접근 권한이 없습니다. Firestore 보안 규칙을 확인해주세요."
-        : "데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요."
+      describeFirestoreError(error, "데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
     );
     showScreen("auth");
     await signOutUser().catch(() => {});
@@ -371,7 +351,6 @@ async function handleUserChange(user) {
     if (token !== sessionToken) return;
   }
 
-  currentRole = role;
   useViews(role);
   renderNav();
 

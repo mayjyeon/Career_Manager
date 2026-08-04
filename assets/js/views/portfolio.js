@@ -2,21 +2,23 @@
  * 포트폴리오 — 학생이 자유롭게 모아 두고, 선생님은 학생별로 열람합니다.
  */
 import { portfolios, profiles, session } from "../board.js";
-import { attachDraft } from "../drafts.js";
-import { parseLinks } from "../links.js";
 import { TEACHER } from "../roles.js";
-import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
 import {
-  clearFormError,
-  confirmDialog,
-  emptyState,
-  esc,
-  openModal,
-  showFormError,
-  toast,
-} from "../ui.js";
+  linkField,
+  openPostForm,
+  profileSnapshot,
+  renderBody,
+  renderLinks,
+  renderPostMeta,
+} from "./post-parts.js";
+import { confirmDialog, emptyState, esc, on, toast } from "../ui.js";
 
-export const meta = { id: "portfolio", icon: "🎒", title: "포트폴리오", needs: ["portfolios", "profiles"] };
+export const meta = {
+  id: "portfolio",
+  icon: "🎒",
+  title: "포트폴리오",
+  needs: ["portfolios", "profiles"],
+};
 
 // 선생님 화면에서 펼쳐 둔 학생을 기억합니다.
 const expanded = new Set();
@@ -25,9 +27,7 @@ const expanded = new Set();
    쓰기 (학생)
    ========================================================= */
 function openEntryForm(entry, onSaved) {
-  let draft = null;
-
-  const form = openModal({
+  openPostForm({
     title: entry ? "포트폴리오 수정" : "포트폴리오 추가",
     subtitle: entry ? "" : "활동 기록, 수상, 독서, 진로 탐색 등 무엇이든 남겨보세요.",
     body: `
@@ -42,61 +42,22 @@ function openEntryForm(entry, onSaved) {
                   placeholder="무엇을 했고 무엇을 느꼈는지 적어보세요.">${esc(entry?.body ?? "")}</textarea>
       </div>
       ${linkField(entry?.links ?? [], { label: "자료 링크" })}`,
-    actions: [
-      { label: "취소", variant: "secondary", value: "cancel" },
-      { label: "저장", variant: "primary", value: "submit" },
-    ],
-    onAction: async (action, formEl) => {
-      if (action !== "submit") return;
-
-      clearFormError(formEl);
-      const get = (name) => formEl.elements[name].value.trim();
-
+    draftKey: `portfolio:${entry?.id ?? "new"}`,
+    draftFields: ["title", "body", "links"],
+    read(get, links) {
       const title = get("title");
-      if (!title) {
-        showFormError(formEl, "제목을 입력해주세요.");
-        return false;
-      }
+      if (!title) return { ok: false, error: "제목을 입력해주세요." };
 
-      const links = parseLinks(get("links"));
-      if (!links.ok) {
-        showFormError(formEl, links.error);
-        return false;
-      }
-
-      const profile = profiles.mine();
-      const fields = {
-        title,
-        body: get("body"),
-        links: links.links,
-        profile: profile
-          ? {
-              name: profile.name,
-              grade: profile.grade,
-              classNo: profile.classNo,
-              studentNo: profile.studentNo,
-            }
-          : null,
+      return {
+        ok: true,
+        fields: { title, body: get("body"), links, profile: profileSnapshot() },
       };
-
-      try {
-        if (entry) await portfolios.update(entry.id, fields);
-        else await portfolios.add(fields);
-
-        draft?.done();
-        toast(entry ? "포트폴리오를 수정했습니다." : "포트폴리오를 추가했습니다.", "success");
-        onSaved();
-      } catch (error) {
-        showFormError(formEl, error?.message ?? "저장하지 못했습니다.");
-        return false;
-      }
-
-      return true;
     },
+    save: (fields) =>
+      entry ? portfolios.update(entry.id, fields) : portfolios.add(fields),
+    done: entry ? "포트폴리오를 수정했습니다." : "포트폴리오를 추가했습니다.",
+    onSaved,
   });
-
-  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
-  draft = attachDraft(form, `portfolio:${entry?.id ?? "new"}`, ["title", "body", "links"]);
 }
 
 /* =========================================================
@@ -179,14 +140,12 @@ function renderForTeacher(container) {
            </section>`
     }`;
 
-  container.querySelectorAll("[data-student]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const uid = button.dataset.student;
-      if (expanded.has(uid)) expanded.delete(uid);
-      else expanded.add(uid);
-      renderForTeacher(container);
-    })
-  );
+  on(container, "[data-student]", (button) => {
+    const uid = button.dataset.student;
+    if (expanded.has(uid)) expanded.delete(uid);
+    else expanded.add(uid);
+    renderForTeacher(container);
+  });
 }
 
 /** 학생 화면 — 내 포트폴리오만 보고 고칩니다. */
@@ -217,38 +176,32 @@ function renderForStudent(container) {
            </section>`
     }`;
 
-  container.querySelectorAll("[data-add]").forEach((button) =>
-    button.addEventListener("click", () => openEntryForm(null, rerender))
-  );
+  on(container, "[data-add]", () => openEntryForm(null, rerender));
 
-  container.querySelectorAll("[data-edit]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const entry = portfolios.find(button.dataset.edit);
-      if (entry) openEntryForm(entry, rerender);
-    })
-  );
+  on(container, "[data-edit]", (button) => {
+    const entry = portfolios.find(button.dataset.edit);
+    if (entry) openEntryForm(entry, rerender);
+  });
 
-  container.querySelectorAll("[data-remove]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const entry = portfolios.find(button.dataset.remove);
-      if (!entry) return;
+  on(container, "[data-remove]", async (button) => {
+    const entry = portfolios.find(button.dataset.remove);
+    if (!entry) return;
 
-      const ok = await confirmDialog({
-        title: "포트폴리오 삭제",
-        message: `‘${entry.title}’ 을 삭제할까요?`,
-        confirmLabel: "삭제",
-      });
-      if (!ok) return;
+    const ok = await confirmDialog({
+      title: "포트폴리오 삭제",
+      message: `‘${entry.title}’ 을 삭제할까요?`,
+      confirmLabel: "삭제",
+    });
+    if (!ok) return;
 
-      try {
-        await portfolios.remove(entry.id);
-        toast("삭제했습니다.");
-        rerender();
-      } catch {
-        // 오류 메시지는 board.js 가 토스트로 알립니다.
-      }
-    })
-  );
+    try {
+      await portfolios.remove(entry.id);
+      toast("삭제했습니다.");
+      rerender();
+    } catch {
+      // 오류 메시지는 board.js 가 토스트로 알립니다.
+    }
+  });
 }
 
 export function render(container) {
