@@ -15,6 +15,7 @@ import {
   sessions as sessionStore,
   softDelete as softDeleteOwn,
   students as studentStore,
+  teacherAchievements,
   teacherPortfolios,
   trash as ownTrash,
 } from "./store.js";
@@ -23,6 +24,12 @@ import { TEACHER } from "./roles.js";
 
 /** 휴지통에 남겨 두는 기간(일). */
 export const TRASH_DAYS = 30;
+
+/**
+ * 학생을 지울 때 함께 옮겨야 하는, 그 화면을 열 때만 붙는 컬렉션.
+ * 미리 불러오지 않으면 학생만 지워지고 자료가 주인 없이 남습니다.
+ */
+const OWN_STUDENT_DATA = ["portfolios", "achievements"];
 
 const DAY = 86400000;
 
@@ -106,6 +113,20 @@ export function listTrash(role) {
         id: entry.id,
       });
     }
+
+    for (const entry of ownTrash.achievements()) {
+      if (entry.deletedWith) continue;
+
+      items.push({
+        kind: "세특",
+        title: (entry.content ?? "").slice(0, 30) || "내용 없음",
+        detail: entry.studentName ?? "이름 없음",
+        deletedAt: entry.deletedAt,
+        source: "own",
+        collection: "achievements",
+        id: entry.id,
+      });
+    }
   }
 
   for (const { key, label, store } of boardKinds) {
@@ -144,10 +165,12 @@ export async function restoreItem(item) {
   if (item.collection === "students") {
     const sessions = deletedWith(ownTrash.sessions(), item.id);
     const portfolios = deletedWith(ownTrash.portfolios(), item.id);
+    const achievements = deletedWith(ownTrash.achievements(), item.id);
 
     await restoreOwn("students", item.id);
     if (sessions.length) await restoreOwn("sessions", sessions);
     if (portfolios.length) await restoreOwn("portfolios", portfolios);
+    if (achievements.length) await restoreOwn("achievements", achievements);
     return;
   }
 
@@ -161,15 +184,17 @@ export async function purgeItem(item) {
   }
 
   if (item.collection === "students") {
-    await ensureSynced(["portfolios"]);
+    await ensureSynced(OWN_STUDENT_DATA);
 
     // 학생과 함께 지운 것뿐 아니라 그 전에 따로 지워 둔 것까지 모두 없앱니다.
     // 하나라도 남으면 주인 없는 기록이 되어 통계에서 걷어내야 합니다.
     const sessions = sessionStore.allIdsForStudent(item.id);
     const portfolios = teacherPortfolios.allIdsForStudent(item.id);
+    const achievements = teacherAchievements.allIdsForStudent(item.id);
 
     if (sessions.length) await purgeOwn("sessions", sessions);
     if (portfolios.length) await purgeOwn("portfolios", portfolios);
+    if (achievements.length) await purgeOwn("achievements", achievements);
     await purgeOwn("students", item.id);
     return;
   }
@@ -216,13 +241,14 @@ export async function purgeExpired(role) {
  * @param {string[]} studentIds
  */
 export async function trashStudents(studentIds) {
-  // 포트폴리오는 그 탭을 열 때 붙이므로, 학생 관리 화면에서 지울 때는
+  // 포트폴리오와 세특은 각자의 탭을 열 때 붙이므로, 학생 관리 화면에서 지울 때는
   // 먼저 불러와야 남는 자료 없이 함께 옮길 수 있습니다.
-  await ensureSynced(["portfolios"]);
+  await ensureSynced(OWN_STUDENT_DATA);
 
   const deletedAt = new Date().toISOString();
   const sessionOps = [];
   const portfolioOps = [];
+  const achievementOps = [];
 
   for (const studentId of studentIds) {
     for (const row of sessionStore.forStudent(studentId)) {
@@ -236,10 +262,15 @@ export async function trashStudents(studentIds) {
     for (const row of teacherPortfolios.forStudent(studentId)) {
       portfolioOps.push({ id: row.id, fields: { deletedAt, deletedWith: studentId } });
     }
+
+    for (const row of teacherAchievements.forStudent(studentId)) {
+      achievementOps.push({ id: row.id, fields: { deletedAt, deletedWith: studentId } });
+    }
   }
 
   if (sessionOps.length) await commitSessions(sessionOps);
   if (portfolioOps.length) await teacherPortfolios.save(portfolioOps);
+  if (achievementOps.length) await teacherAchievements.save(achievementOps);
 
   // 같은 반 학생을 여러 명 지워도 그 반 문서는 한 번만 씁니다.
   await softDeleteOwn("students", studentIds);
@@ -253,4 +284,9 @@ export function trashSession(sessionIds) {
 /** 선생님이 등록한 포트폴리오를 휴지통으로 보냅니다. */
 export function trashPortfolio(entryIds) {
   return softDeleteOwn("portfolios", entryIds);
+}
+
+/** 세특을 휴지통으로 보냅니다. */
+export function trashAchievement(entryIds) {
+  return softDeleteOwn("achievements", entryIds);
 }

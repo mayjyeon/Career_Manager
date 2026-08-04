@@ -5,8 +5,8 @@
  * 모두 이 파일을 거칩니다. 정렬 순서와 학년도 규칙이 화면마다 달라지지 않도록
  * 여기 한 곳에만 적어 둡니다.
  */
-import { students, sessions, newId, teacherPortfolios } from "./store.js";
-import { trashPortfolio, trashSession, trashStudents } from "./trash.js";
+import { students, sessions, newId, teacherAchievements, teacherPortfolios } from "./store.js";
+import { trashAchievement, trashPortfolio, trashSession, trashStudents } from "./trash.js";
 import { JOURNAL_TOPICS, topicsToCategory } from "./counseling-docs.js";
 
 /* =========================================================
@@ -576,5 +576,162 @@ export const portfolioService = {
   /** 포트폴리오를 휴지통으로 보냅니다. 여러 건을 한 번에 보낼 수 있습니다. */
   remove(ids) {
     return trashPortfolio(ids);
+  },
+};
+
+/* =========================================================
+   AchievementService — 세특 및 활동
+
+   선생님이 엑셀로 올리거나 직접 적어 넣습니다. 학생에게는 보이지 않습니다.
+   ========================================================= */
+/**
+ * 나이스 기준 바이트 수.
+ *
+ * 한글 한 글자 3바이트, 영문·숫자·기호·공백 1바이트입니다(UTF-8 과 같습니다).
+ * 줄바꿈은 1바이트로 셉니다.
+ */
+const encoder = new TextEncoder();
+
+export const byteLength = (text) => encoder.encode(String(text ?? "")).length;
+
+/** 덧붙인 칸 목록을 { 칸이름: 값 } 으로 폅니다. */
+const extrasMap = (extras) =>
+  Object.fromEntries((extras ?? []).map((extra) => [extra.label, extra.value]));
+
+export const achievementService = {
+  /**
+   * 세특 목록을 조건에 맞게 조회합니다. 학번 순으로 정렬합니다.
+   *
+   * @param {{ name?: string, grade?: number|null, classNo?: number|null, keyword?: string }} [filter]
+   */
+  getEntries({ name = "", grade = null, classNo = null, keyword = "" } = {}) {
+    const nameKeyword = name.trim().toLowerCase();
+    const textKeyword = keyword.trim().toLowerCase();
+
+    return teacherAchievements
+      .all()
+      .map((entry) => {
+        const student = students.find(entry.studentId);
+        return {
+          ...entry,
+          student,
+          name: student?.name ?? entry.studentName ?? "",
+          bytes: byteLength(entry.content),
+        };
+      })
+      .filter(
+        (entry) =>
+          (!nameKeyword || entry.name.toLowerCase().includes(nameKeyword)) &&
+          (grade == null || entry.grade === grade) &&
+          (classNo == null || entry.classNo === classNo) &&
+          (!textKeyword ||
+            `${entry.content ?? ""} ${(entry.extras ?? [])
+              .map((extra) => extra.value)
+              .join(" ")}`
+              .toLowerCase()
+              .includes(textKeyword))
+      )
+      .sort(bySeat);
+  },
+
+  find(id) {
+    return teacherAchievements.find(id);
+  },
+
+  getTotalCount() {
+    return teacherAchievements.all().length;
+  },
+
+  /** 지금까지 쓰인 ‘덧붙인 칸’ 이름을 처음 나온 차례대로 모읍니다. */
+  getExtraColumns() {
+    const seen = [];
+
+    for (const entry of teacherAchievements.all()) {
+      for (const extra of entry.extras ?? []) {
+        if (extra.label && !seen.includes(extra.label)) seen.push(extra.label);
+      }
+    }
+    return seen;
+  },
+
+  /**
+   * 세특을 여러 건 등록합니다.
+   *
+   * @param {Array<{ student: object, content: string,
+   *                 extras?: Array<{label: string, value: string}>, source?: string }>} rows
+   * @returns {Promise<number>} 등록한 건수
+   */
+  async addMany(rows) {
+    const changes = rows.map(({ student, content, extras, source }) => ({
+      id: newId(),
+      seat: seatOf(student),
+      fields: teacherAchievements.fields({
+        studentId: student.id,
+        studentName: student.name,
+        content,
+        extras: extras ?? [],
+        source: source ?? null,
+      }),
+    }));
+
+    if (changes.length) await teacherAchievements.save(changes);
+    return changes.length;
+  },
+
+  /** 세특 한 건의 내용과 덧붙인 칸을 고칩니다. */
+  update(id, { content, extras }) {
+    if (!teacherAchievements.find(id)) {
+      return { ok: false, error: "세특을 찾을 수 없습니다." };
+    }
+
+    teacherAchievements.update(id, { content, extras: extras ?? [] });
+    return { ok: true, error: null };
+  },
+
+  /** 세특을 휴지통으로 보냅니다. 여러 건을 한 번에 보낼 수 있습니다. */
+  remove(ids) {
+    return trashAchievement(ids);
+  },
+
+  /**
+   * 내보낼 표를 만듭니다.
+   *
+   * 기본 칸(학번·이름·세특 내용·바이트 수) 뒤에 선생님이 덧붙였던 칸을
+   * 처음 나온 차례대로 붙입니다. 바이트 수는 저장된 값이 아니라
+   * 지금 내용에서 다시 셉니다.
+   *
+   * @param {Array<object>} entries getEntries 의 결과
+   * @returns {{ columns: Array<object>, rows: Array<Array<string|number>> }}
+   */
+  toSheet(entries) {
+    // 내보낼 줄에 실제로 쓰인 칸만 넣습니다.
+    const extraLabels = [];
+    for (const entry of entries) {
+      for (const extra of entry.extras ?? []) {
+        if (extra.label && !extraLabels.includes(extra.label)) extraLabels.push(extra.label);
+      }
+    }
+
+    const columns = [
+      { label: "학번", width: 10 },
+      { label: "이름", width: 10 },
+      { label: "세특 내용", width: 80 },
+      { label: "바이트 수", width: 10, numeric: true },
+      ...extraLabels.map((label) => ({ label, width: 14 })),
+    ];
+
+    const rows = entries.map((entry) => {
+      const extras = extrasMap(entry.extras);
+
+      return [
+        formatStudentNumber(entry),
+        entry.name,
+        entry.content ?? "",
+        byteLength(entry.content),
+        ...extraLabels.map((label) => extras[label] ?? ""),
+      ];
+    });
+
+    return { columns, rows };
   },
 };

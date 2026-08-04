@@ -22,6 +22,7 @@ import * as counseling from "./views/counseling.js";
 import * as notices from "./views/notices.js";
 import * as assignments from "./views/assignments.js";
 import * as portfolio from "./views/portfolio.js";
+import * as achievements from "./views/achievements.js";
 import * as studentHome from "./views/student-home.js";
 import * as statistics from "./views/statistics.js";
 import * as trash from "./views/trash.js";
@@ -29,7 +30,17 @@ import { profileFields, readProfileForm } from "./views/profile-form.js";
 
 /** 역할에 따라 보이는 메뉴가 다릅니다. */
 const VIEWS = {
-  teacher: [dashboard, students, counseling, notices, assignments, portfolio, statistics, trash],
+  teacher: [
+    dashboard,
+    students,
+    counseling,
+    notices,
+    assignments,
+    portfolio,
+    achievements,
+    statistics,
+    trash,
+  ],
   student: [studentHome, notices, assignments, portfolio, trash],
 };
 
