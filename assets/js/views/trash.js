@@ -9,7 +9,7 @@ import {
   purgeItem,
   restoreItem,
 } from "../trash.js";
-import { confirmDialog, emptyState, esc, relativeDate, toast } from "../ui.js";
+import { confirmDialog, emptyState, esc, on, relativeDate, toast } from "../ui.js";
 
 export const meta = {
   id: "trash",
@@ -105,44 +105,40 @@ export function render(container) {
       }
     </section>`;
 
-  container.querySelectorAll("[data-restore]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const item = items[Number.parseInt(button.dataset.restore, 10)];
-      if (!item) return;
+  on(container, "[data-restore]", async (button) => {
+    const item = items[Number.parseInt(button.dataset.restore, 10)];
+    if (!item) return;
 
-      try {
-        await restoreItem(item);
-        toast(`${item.kind}을(를) 되살렸습니다.`, "success");
-        rerender();
-      } catch {
-        // 오류 메시지는 데이터 계층이 토스트로 알립니다.
-      }
-    })
-  );
+    try {
+      await restoreItem(item);
+      toast(`${item.kind}을(를) 되살렸습니다.`, "success");
+      rerender();
+    } catch {
+      // 오류 메시지는 데이터 계층이 토스트로 알립니다.
+    }
+  });
 
-  container.querySelectorAll("[data-purge]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const item = items[Number.parseInt(button.dataset.purge, 10)];
-      if (!item) return;
+  on(container, "[data-purge]", async (button) => {
+    const item = items[Number.parseInt(button.dataset.purge, 10)];
+    if (!item) return;
 
-      const ok = await confirmDialog({
-        title: "완전 삭제",
-        message: `‘${item.title}’ 을(를) 완전히 지울까요?\n되돌릴 수 없습니다.`,
-        confirmLabel: "완전 삭제",
-      });
-      if (!ok) return;
+    const ok = await confirmDialog({
+      title: "완전 삭제",
+      message: `‘${item.title}’ 을(를) 완전히 지울까요?\n되돌릴 수 없습니다.`,
+      confirmLabel: "완전 삭제",
+    });
+    if (!ok) return;
 
-      try {
-        await purgeItem(item);
-        toast("완전히 지웠습니다.");
-        rerender();
-      } catch {
-        // 오류 메시지는 데이터 계층이 토스트로 알립니다.
-      }
-    })
-  );
+    try {
+      await purgeItem(item);
+      toast("완전히 지웠습니다.");
+      rerender();
+    } catch {
+      // 오류 메시지는 데이터 계층이 토스트로 알립니다.
+    }
+  });
 
-  container.querySelector("[data-empty]")?.addEventListener("click", async () => {
+  on(container, "[data-empty]", async () => {
     const ok = await confirmDialog({
       title: "휴지통 비우기",
       message: `${items.length}건을 모두 완전히 지울까요?\n되돌릴 수 없습니다.`,

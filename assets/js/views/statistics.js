@@ -1,8 +1,8 @@
 /** 통계 — 상담 현황을 그래프로 봅니다(선생님 전용). */
-import { sessions, students } from "../store.js";
-import { FORM_CATEGORIES } from "../counseling-form.js";
+import { counselingService, inSchoolYear, schoolYearOf, studentService } from "../services.js";
+import { FORM_CATEGORIES } from "../counseling-docs.js";
 import { barList, chartTable, columnChart, shareBar } from "../chart.js";
-import { emptyState } from "../ui.js";
+import { emptyState, on } from "../ui.js";
 
 export const meta = { id: "statistics", icon: "📊", title: "통계" };
 
@@ -11,21 +11,6 @@ const state = { year: null };
 
 /** 3월부터 다음 해 2월까지가 한 학년도입니다. */
 const SCHOOL_MONTHS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2];
-
-/** 오늘을 기준으로 한 학년도. 1·2월은 지난 학년도에 속합니다. */
-function currentSchoolYear(today = new Date()) {
-  return today.getMonth() + 1 >= 3 ? today.getFullYear() : today.getFullYear() - 1;
-}
-
-/** 그 학년도에 속하는 상담만 고릅니다. */
-function inSchoolYear(session, year) {
-  const date = new Date(session.sessionDate);
-  if (Number.isNaN(date.getTime())) return false;
-
-  const month = date.getMonth() + 1;
-  const y = date.getFullYear();
-  return month >= 3 ? y === year : y === year + 1;
-}
 
 /* =========================================================
    집계
@@ -52,7 +37,7 @@ function categoryStats(rows) {
 /** 학년·반별로 학생 수와 상담 건수를 셉니다. */
 function classStats(rows) {
   // 학년·반은 학생 행에 함께 붙어 옵니다(반 문서에서 펼쳐진 값).
-  const seats = new Map(students.all().map((student) => [student.id, student]));
+  const seats = new Map(studentService.getAll().map((student) => [student.id, student]));
   const groups = new Map();
 
   const groupOf = (seat) => {
@@ -79,25 +64,18 @@ function classStats(rows) {
    화면
    ========================================================= */
 export function render(container) {
+  const all = counselingService.getAll();
+
   const years = [
-    ...new Set(
-      sessions
-        .all()
-        .map((s) => {
-          const date = new Date(s.sessionDate);
-          if (Number.isNaN(date.getTime())) return null;
-          return date.getMonth() + 1 >= 3 ? date.getFullYear() : date.getFullYear() - 1;
-        })
-        .filter((y) => y != null)
-    ),
+    ...new Set(all.map((s) => schoolYearOf(s.sessionDate)).filter((y) => y != null)),
   ].sort((a, b) => b - a);
 
-  if (years.length === 0) years.push(currentSchoolYear());
+  if (years.length === 0) years.push(schoolYearOf(new Date()));
 
   const year = state.year && years.includes(state.year) ? state.year : years[0];
   state.year = year;
 
-  const rows = sessions.all().filter((s) => inSchoolYear(s, year));
+  const rows = all.filter((s) => inSchoolYear(s, year));
   const monthly = monthlyStats(rows);
   const categories = categoryStats(rows);
   const classes = classStats(rows);
@@ -153,7 +131,7 @@ export function render(container) {
           <strong class="stat__value">${
             new Set(rows.map((r) => r.studentId)).size
           }<span class="stat__unit">명</span></strong>
-          <span class="stat__sub">전체 ${students.all().length}명 중</span>
+          <span class="stat__sub">전체 ${studentService.getAll().length}명 중</span>
         </div>
       </div>
     </section>
@@ -215,8 +193,13 @@ export function render(container) {
     </section>`
     }`;
 
-  container.querySelector("#stat-year")?.addEventListener("change", (event) => {
-    state.year = Number.parseInt(event.target.value, 10);
-    render(container);
-  });
+  on(
+    container,
+    "#stat-year",
+    (select) => {
+      state.year = Number.parseInt(select.value, 10);
+      render(container);
+    },
+    "change"
+  );
 }

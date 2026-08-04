@@ -91,3 +91,24 @@ export function firebaseContext() {
   }
   return context;
 }
+
+/**
+ * Firestore 오류를 사용자에게 보여줄 문구로 바꿉니다.
+ *
+ * 권한과 네트워크는 어디서 나든 원인과 대처가 같아 여기 한 곳에 모아 둡니다.
+ * 그 밖의 오류는 부르는 쪽이 상황에 맞는 문구(fallback)를 넘겨줍니다.
+ *
+ * @param {unknown} error
+ * @param {string} fallback
+ * @returns {string}
+ */
+export function describeFirestoreError(error, fallback) {
+  switch (error?.code) {
+    case "permission-denied":
+      return "자료에 접근할 권한이 없습니다. Firestore 보안 규칙을 다시 배포해주세요.";
+    case "unavailable":
+      return "네트워크에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도해주세요.";
+    default:
+      return fallback;
+  }
+}

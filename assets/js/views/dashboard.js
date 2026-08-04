@@ -7,6 +7,7 @@ import {
   initials,
   categoryClass,
   emptyState,
+  on,
 } from "../ui.js";
 
 export const meta = { id: "dashboard", icon: "🏠", title: "대시보드" };
@@ -85,7 +86,5 @@ export function render(container, { navigate }) {
       }
     </section>`;
 
-  container.querySelectorAll("[data-go]").forEach((btn) =>
-    btn.addEventListener("click", () => navigate(btn.dataset.go))
-  );
+  on(container, "[data-go]", (button) => navigate(button.dataset.go));
 }

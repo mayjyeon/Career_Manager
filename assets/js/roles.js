@@ -16,8 +16,6 @@ export function roleOf(user) {
   return email === TEACHER_EMAIL ? TEACHER : STUDENT;
 }
 
-export const isTeacher = (user) => roleOf(user) === TEACHER;
-
 /* =========================================================
    공개 대상
    ========================================================= */

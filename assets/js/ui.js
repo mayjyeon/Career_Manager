@@ -72,6 +72,26 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+/* =========================================================
+   이벤트 붙이기
+   ========================================================= */
+/**
+ * 화면 안의 요소에 동작을 붙입니다.
+ *
+ * 화면은 innerHTML 로 통째로 다시 그리므로 그릴 때마다 이 짝이 필요합니다.
+ * 없는 요소를 골라도 아무 일도 일어나지 않습니다.
+ *
+ * @param {ParentNode} root
+ * @param {string} selector
+ * @param {(element: Element, event: Event) => void} handler
+ * @param {string} [type] 기본은 click
+ */
+export function on(root, selector, handler, type = "click") {
+  root.querySelectorAll(selector).forEach((element) => {
+    element.addEventListener(type, (event) => handler(element, event));
+  });
+}
+
 /** 빈 상태 블록 HTML. */
 export function emptyState({ icon, title, desc = "", action = "" }) {
   return `

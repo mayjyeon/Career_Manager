@@ -1,18 +1,8 @@
 /** 공지사항 — 선생님이 올리고 학생이 봅니다. */
 import { notices, profiles, session } from "../board.js";
-import { attachDraft } from "../drafts.js";
-import { parseLinks } from "../links.js";
 import { TEACHER, describeTargets, formatTargets, matchesTargets, parseTargets } from "../roles.js";
-import { linkField, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
-import {
-  clearFormError,
-  confirmDialog,
-  emptyState,
-  esc,
-  openModal,
-  showFormError,
-  toast,
-} from "../ui.js";
+import { linkField, openPostForm, renderBody, renderLinks, renderPostMeta } from "./post-parts.js";
+import { confirmDialog, emptyState, esc, on, toast } from "../ui.js";
 
 export const meta = { id: "notices", icon: "📢", title: "공지사항" };
 
@@ -42,60 +32,28 @@ function noticeFormBody(notice) {
 }
 
 function openNoticeForm(notice, onSaved) {
-  let draft = null;
-
-  const created = openModal({
+  openPostForm({
     title: notice ? "공지 수정" : "공지 작성",
     subtitle: notice ? "" : "학생 화면에도 그대로 보입니다.",
     body: noticeFormBody(notice),
-    actions: [
-      { label: "취소", variant: "secondary", value: "cancel" },
-      { label: "저장", variant: "primary", value: "submit" },
-    ],
-    onAction: async (action, form) => {
-      if (action !== "submit") return;
-
-      clearFormError(form);
-      const get = (name) => form.elements[name].value.trim();
-
+    draftKey: `notice:${notice?.id ?? "new"}`,
+    draftFields: ["title", "body", "targets", "links"],
+    read(get, links) {
       const title = get("title");
-      if (!title) {
-        showFormError(form, "제목을 입력해주세요.");
-        return false;
-      }
+      if (!title) return { ok: false, error: "제목을 입력해주세요." };
 
       const targets = parseTargets(get("targets"));
-      if (!targets.ok) {
-        showFormError(form, targets.error);
-        return false;
-      }
+      if (!targets.ok) return { ok: false, error: targets.error };
 
-      const links = parseLinks(get("links"));
-      if (!links.ok) {
-        showFormError(form, links.error);
-        return false;
-      }
-
-      const fields = { title, body: get("body"), targets: targets.targets, links: links.links };
-
-      try {
-        if (notice) await notices.update(notice.id, fields);
-        else await notices.add({ ...fields, authorUid: session.uid() });
-
-        draft?.done();
-        toast(notice ? "공지를 수정했습니다." : "공지를 올렸습니다.", "success");
-        onSaved();
-      } catch (error) {
-        showFormError(form, error?.message ?? "저장하지 못했습니다.");
-        return false;
-      }
-
-      return true;
+      return { ok: true, fields: { title, body: get("body"), targets: targets.targets, links } };
     },
+    save: (fields) =>
+      notice
+        ? notices.update(notice.id, fields)
+        : notices.add({ ...fields, authorUid: session.uid() }),
+    done: notice ? "공지를 수정했습니다." : "공지를 올렸습니다.",
+    onSaved,
   });
-
-  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
-  draft = attachDraft(created, `notice:${notice?.id ?? "new"}`, ["title", "body", "targets", "links"]);
 }
 
 /* =========================================================
@@ -168,36 +126,30 @@ export function render(container) {
            </section>`
     }`;
 
-  container.querySelectorAll("[data-add]").forEach((button) =>
-    button.addEventListener("click", () => openNoticeForm(null, rerender))
-  );
+  on(container, "[data-add]", () => openNoticeForm(null, rerender));
 
-  container.querySelectorAll("[data-edit]").forEach((button) =>
-    button.addEventListener("click", () => {
-      const notice = notices.find(button.dataset.edit);
-      if (notice) openNoticeForm(notice, rerender);
-    })
-  );
+  on(container, "[data-edit]", (button) => {
+    const notice = notices.find(button.dataset.edit);
+    if (notice) openNoticeForm(notice, rerender);
+  });
 
-  container.querySelectorAll("[data-remove]").forEach((button) =>
-    button.addEventListener("click", async () => {
-      const notice = notices.find(button.dataset.remove);
-      if (!notice) return;
+  on(container, "[data-remove]", async (button) => {
+    const notice = notices.find(button.dataset.remove);
+    if (!notice) return;
 
-      const ok = await confirmDialog({
-        title: "공지 삭제",
-        message: `‘${notice.title}’ 공지를 삭제할까요?`,
-        confirmLabel: "삭제",
-      });
-      if (!ok) return;
+    const ok = await confirmDialog({
+      title: "공지 삭제",
+      message: `‘${notice.title}’ 공지를 삭제할까요?`,
+      confirmLabel: "삭제",
+    });
+    if (!ok) return;
 
-      try {
-        await notices.remove(notice.id);
-        toast("공지를 삭제했습니다.");
-        rerender();
-      } catch {
-        // 오류 메시지는 board.js 가 토스트로 알립니다.
-      }
-    })
-  );
+    try {
+      await notices.remove(notice.id);
+      toast("공지를 삭제했습니다.");
+      rerender();
+    } catch {
+      // 오류 메시지는 board.js 가 토스트로 알립니다.
+    }
+  });
 }

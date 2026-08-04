@@ -61,11 +61,6 @@ export function watchUser(handler) {
   return onAuthStateChanged(firebaseContext().auth, handler);
 }
 
-/** 현재 로그인한 사용자(없으면 null). */
-export function currentUser() {
-  return firebaseContext().auth.currentUser;
-}
-
 /** Google 계정으로 로그인합니다. */
 export async function signInWithGoogle() {
   const provider = new GoogleAuthProvider();

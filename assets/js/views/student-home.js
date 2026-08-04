@@ -3,13 +3,13 @@ import { assignments, notices, portfolios, profiles, submissions, withdraw } fro
 import { signOutUser } from "../auth.js";
 import { matchesTargets } from "../roles.js";
 import { renderPostMeta } from "./post-parts.js";
-import { confirmDialog, emptyState, esc, relativeDate, toast } from "../ui.js";
+import { confirmDialog, emptyState, esc, on, relativeDate, toast } from "../ui.js";
 import { openProfileForm } from "./profile-form.js";
 
 /** 졸업 등으로 더 이상 쓰지 않을 때 내 자료를 모두 지웁니다. */
 async function confirmWithdraw() {
   const counts = {
-    submissions: submissions.all().length,
+    submissions: submissions.mineAll().length,
     portfolios: portfolios.mine().length,
   };
 
@@ -159,16 +159,14 @@ export function render(container, { navigate }) {
       </div>
     </section>`;
 
-  container.querySelectorAll("[data-go]").forEach((button) =>
-    button.addEventListener("click", () => navigate(button.dataset.go))
-  );
+  on(container, "[data-go]", (button) => navigate(button.dataset.go));
 
-  container.querySelector("[data-profile]")?.addEventListener("click", () =>
+  on(container, "[data-profile]", () =>
     openProfileForm(profile, () => {
       toast("내 정보를 수정했습니다.", "success");
       rerender();
     })
   );
 
-  container.querySelector("[data-withdraw]")?.addEventListener("click", () => confirmWithdraw());
+  on(container, "[data-withdraw]", () => confirmWithdraw());
 }

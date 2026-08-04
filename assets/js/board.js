@@ -22,7 +22,7 @@ import {
   updateDoc,
   where,
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
-import { firebaseContext } from "./firebase.js";
+import { describeFirestoreError, firebaseContext } from "./firebase.js";
 import { TEACHER } from "./roles.js";
 
 const emptyCache = () => ({
@@ -47,14 +47,7 @@ function notifyChange() {
 }
 
 function notifyError(error, fallback) {
-  const message =
-    error?.code === "permission-denied"
-      ? "자료에 접근할 권한이 없습니다. Firestore 보안 규칙을 다시 배포해주세요."
-      : error?.code === "unavailable"
-        ? "네트워크에 연결할 수 없어 저장하지 못했습니다."
-        : fallback;
-
-  errorHandler?.(message, error);
+  errorHandler?.(describeFirestoreError(error, fallback), error);
 }
 
 /* =========================================================
@@ -255,66 +248,43 @@ export const profiles = {
   },
 };
 
-export const notices = {
-  all() {
-    return live("notices").sort(byNewest);
-  },
-  find(id) {
-    return cache.notices.find((n) => n.id === id) ?? null;
-  },
-  add(fields) {
-    return create("notices", fields);
-  },
-  update(id, fields) {
-    return patch("notices", id, fields);
-  },
-  remove(id) {
-    return softDelete("notices", id);
-  },
-  restore(id) {
-    return restore("notices", id);
-  },
-  purge(id) {
-    return purge("notices", id);
-  },
-  trash() {
-    return deleted("notices").sort(byNewest);
-  },
-};
+/**
+ * 컬렉션 하나를 다루는 기본 도구.
+ * 네 컬렉션이 모두 같은 방식으로 읽고 쓰므로 여기서 한 벌만 만듭니다.
+ *
+ * @param {string} name
+ * @param {{ owned?: boolean }} [options] owned 면 글에 올린 사람(studentUid)을 남깁니다.
+ */
+function collectionApi(name, { owned = false } = {}) {
+  return {
+    /** 휴지통에 없는 글을 최신순으로. */
+    all: () => live(name).sort(byNewest),
+    /** 휴지통에 있는 것까지 찾습니다(되살리기·완전 삭제에 씁니다). */
+    find: (id) => cache[name].find((row) => row.id === id) ?? null,
+    add: (fields) => create(name, owned ? { ...fields, studentUid: currentUid } : fields),
+    update: (id, fields) => patch(name, id, fields),
+    remove: (id) => softDelete(name, id),
+    restore: (id) => restore(name, id),
+    purge: (id) => purge(name, id),
+    trash: () => deleted(name).sort(byNewest),
+  };
+}
 
-export const assignments = {
-  all() {
-    return live("assignments").sort(byNewest);
-  },
-  find(id) {
-    return cache.assignments.find((a) => a.id === id) ?? null;
-  },
-  add(fields) {
-    return create("assignments", fields);
-  },
-  update(id, fields) {
-    return patch("assignments", id, fields);
-  },
-  remove(id) {
-    return softDelete("assignments", id);
-  },
-  restore(id) {
-    return restore("assignments", id);
-  },
-  purge(id) {
-    return purge("assignments", id);
-  },
-  trash() {
-    return deleted("assignments").sort(byNewest);
-  },
-};
+export const notices = collectionApi("notices");
+
+export const assignments = collectionApi("assignments");
 
 export const submissions = {
-  all() {
-    return live("submissions").sort(byNewest);
-  },
+  ...collectionApi("submissions", { owned: true }),
+
   forAssignment(assignmentId) {
-    return live("submissions").filter((s) => s.assignmentId === assignmentId).sort(byNewest);
+    return live("submissions")
+      .filter((s) => s.assignmentId === assignmentId)
+      .sort(byNewest);
+  },
+  /** 학생 본인이 낸 제출물 전체. */
+  mineAll() {
+    return live("submissions").filter((s) => s.studentUid === currentUid);
   },
   /** 학생 본인이 특정 과제에 낸 제출물. */
   mine(assignmentId) {
@@ -324,56 +294,18 @@ export const submissions = {
       ) ?? null
     );
   },
-  add(fields) {
-    return create("submissions", { ...fields, studentUid: currentUid });
-  },
-  update(id, fields) {
-    return patch("submissions", id, fields);
-  },
-  remove(id) {
-    return softDelete("submissions", id);
-  },
-  restore(id) {
-    return restore("submissions", id);
-  },
-  purge(id) {
-    return purge("submissions", id);
-  },
-  trash() {
-    return deleted("submissions").sort(byNewest);
-  },
 };
 
 export const portfolios = {
-  all() {
-    return live("portfolios").sort(byNewest);
-  },
+  ...collectionApi("portfolios", { owned: true }),
+
   forStudent(uid) {
-    return live("portfolios").filter((p) => p.studentUid === uid).sort(byNewest);
+    return live("portfolios")
+      .filter((p) => p.studentUid === uid)
+      .sort(byNewest);
   },
   mine() {
-    return live("portfolios").filter((p) => p.studentUid === currentUid).sort(byNewest);
-  },
-  find(id) {
-    return cache.portfolios.find((p) => p.id === id) ?? null;
-  },
-  add(fields) {
-    return create("portfolios", { ...fields, studentUid: currentUid });
-  },
-  update(id, fields) {
-    return patch("portfolios", id, fields);
-  },
-  remove(id) {
-    return softDelete("portfolios", id);
-  },
-  restore(id) {
-    return restore("portfolios", id);
-  },
-  purge(id) {
-    return purge("portfolios", id);
-  },
-  trash() {
-    return deleted("portfolios").sort(byNewest);
+    return portfolios.forStudent(currentUid);
   },
 };
 

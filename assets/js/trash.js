@@ -95,7 +95,7 @@ export function listTrash(role) {
       items.push({
         kind: label,
         title: row.title || (row.text ?? "").slice(0, 30) || "제목 없음",
-        detail: row.profile ? `${row.profile.name}` : "",
+        detail: row.profile?.name ?? "",
         deletedAt: row.deletedAt,
         source: "board",
         collection: key,

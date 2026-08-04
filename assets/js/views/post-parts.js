@@ -1,9 +1,13 @@
 /**
  * 공지·과제·제출물·포트폴리오가 함께 쓰는 조각들.
- * 글 내용 보여주기, 첨부 링크 목록, 링크 입력 칸을 모아 두었습니다.
+ *
+ * 네 화면은 ‘제목·내용·첨부 링크를 적어 올리는 글’ 이라는 점이 같아서
+ * 글 보여주기와 글쓰기 창을 여기 모아 두었습니다.
  */
-import { MAX_LINKS, formatLinks, linkIcon, linkKind, safeUrl, youtubeId } from "../links.js";
-import { esc, relativeDate } from "../ui.js";
+import { profiles } from "../board.js";
+import { attachDraft } from "../local.js";
+import { MAX_LINKS, formatLinks, linkIcon, linkKind, parseLinks, safeUrl, youtubeId } from "../links.js";
+import { clearFormError, esc, openModal, relativeDate, showFormError, toast } from "../ui.js";
 
 /* =========================================================
    보여주기
@@ -75,6 +79,15 @@ export function renderPostMeta(post, extra = "") {
   return `<span class="caption">${esc(relativeDate(post.createdAt))}${edited}${extra}</span>`;
 }
 
+/** 누가 올렸는지 바로 알 수 있도록 글에 함께 남기는 학생 정보. */
+export function profileSnapshot() {
+  const profile = profiles.mine();
+  if (!profile) return null;
+
+  const { name, grade, classNo, studentNo } = profile;
+  return { name, grade, classNo, studentNo };
+}
+
 /* =========================================================
    링크 입력 칸
    ========================================================= */
@@ -91,4 +104,87 @@ export function linkField(existing = [], { label = "첨부 링크" } = {}) {
         드라이브 파일은 <b>링크가 있는 모든 사용자</b>로 공유해 두어야 학생이 열 수 있습니다.
       </p>
     </div>`;
+}
+
+/* =========================================================
+   글쓰기 창
+   ========================================================= */
+/**
+ * 글쓰기·고치기 창을 엽니다.
+ *
+ * 네 화면 모두 흐름이 같아 여기 한 벌만 둡니다.
+ *   값 읽기 → 첨부 링크 검사 → 저장 → 임시 저장 지우기 → 알림 → 목록 다시 그리기
+ *
+ * 저장에 실패하면 창을 닫지 않고 오류를 폼 안에 보여줍니다.
+ *
+ * @param {object} options
+ * @param {string} options.title
+ * @param {string} [options.subtitle]
+ * @param {string} options.body           본문 HTML (linkField 포함)
+ * @param {string} options.draftKey       임시 저장 이름 (예: "notice:new")
+ * @param {string[]} options.draftFields  임시 저장할 입력 칸 이름
+ * @param {string} [options.submitLabel]
+ * @param {(get: (name: string) => string, links: Array) =>
+ *          ({ ok: true, fields: object } | { ok: false, error: string })} options.read
+ * @param {(fields: object) => Promise<unknown>} options.save
+ * @param {string} options.done           저장 뒤 보여줄 알림
+ * @param {() => void} options.onSaved
+ */
+export function openPostForm({
+  title,
+  subtitle = "",
+  body,
+  draftKey,
+  draftFields,
+  submitLabel = "저장",
+  read,
+  save,
+  done,
+  onSaved,
+}) {
+  let draft = null;
+
+  const form = openModal({
+    title,
+    subtitle,
+    body,
+    actions: [
+      { label: "취소", variant: "secondary", value: "cancel" },
+      { label: submitLabel, variant: "primary", value: "submit" },
+    ],
+    onAction: async (action, modalForm) => {
+      if (action !== "submit") return;
+
+      clearFormError(modalForm);
+      const get = (name) => modalForm.elements[name]?.value.trim() ?? "";
+
+      const links = parseLinks(get("links"));
+      if (!links.ok) {
+        showFormError(modalForm, links.error);
+        return false;
+      }
+
+      const values = read(get, links.links);
+      if (!values.ok) {
+        showFormError(modalForm, values.error);
+        return false;
+      }
+
+      try {
+        await save(values.fields);
+      } catch (error) {
+        showFormError(modalForm, error?.message ?? "저장하지 못했습니다.");
+        return false;
+      }
+
+      draft?.done();
+      toast(done, "success");
+      onSaved();
+      return true;
+    },
+  });
+
+  // 쓰다 만 내용이 사라지지 않도록 입력할 때마다 이 브라우저에 보관합니다.
+  draft = attachDraft(form, draftKey, draftFields);
+  return form;
 }
