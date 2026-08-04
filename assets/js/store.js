@@ -7,10 +7,15 @@
  *                                           topicOther, meetingType, period, subject,
  *                                           durationMinutes, content, intervention, … }
  *   users/{uid}/portfolios/{학년도-학년-반} { schoolYear, grade, classNo, entries: [...], updatedAt }
+ *   users/{uid}/achievements/{학년도-학년-반} { schoolYear, grade, classNo, entries: [...], updatedAt }
  *
  * 포트폴리오는 두 갈래입니다. 학생이 스스로 올린 것은 board.js 가 맡는 공용 컬렉션에 있고,
  * 선생님이 엑셀로 올리거나 직접 적어 넣은 것은 여기(users/{uid}/portfolios)에 있어
  * 선생님만 볼 수 있습니다.
+ *
+ * 세특(achievements)은 글이 길어 문서가 커질 수 있습니다. 반 단위로 묶는 것은
+ * 다른 자료와 같지만, 저장하기 전에 문서 크기를 재어 한도(1MiB)에 가까워지면
+ * 알려 주고 멈춥니다. 자세한 내용은 아래 DOC_LIMIT 를 보세요.
  *
  * 상담 기록의 필드 이름은 진로상담일지 서식의 칸을 따릅니다.
  *   content      내담자가 진술한 문제와 상황
@@ -50,11 +55,11 @@ const CORE_COLLECTIONS = ["classes", "sessions"];
 
 /**
  * 그 화면을 열 때 붙이는 컬렉션.
- * 포트폴리오는 포트폴리오 탭에서만 쓰므로 미리 읽어 오지 않습니다.
+ * 포트폴리오와 세특은 각자의 탭에서만 쓰므로 미리 읽어 오지 않습니다.
  */
-const LAZY_COLLECTIONS = ["portfolios"];
+const LAZY_COLLECTIONS = ["portfolios", "achievements"];
 
-const emptyCache = () => ({ classes: [], sessions: [], portfolios: [] });
+const emptyCache = () => ({ classes: [], sessions: [], portfolios: [], achievements: [] });
 
 let cache = emptyCache();
 let currentUid = null;
@@ -239,10 +244,24 @@ function send(promise) {
 }
 
 /**
+ * 문서 하나에 담을 수 있는 크기.
+ *
+ * Firestore 한도는 1MiB 입니다. 학생 명부와 포트폴리오는 근처에도 못 가지만
+ * 세특은 한 건이 1,500바이트쯤이라 한 반에 여러 과목을 모으면 커집니다
+ * (35명 × 12과목 × 1,500바이트 ≈ 630KB).
+ *
+ * 한도를 넘겨 쓰면 Firestore 가 알아듣기 어려운 오류를 내므로, 그 전에 재어 보고
+ * 무엇을 어떻게 해야 하는지 알려 주며 멈춥니다.
+ */
+const DOC_LIMIT = 800_000;
+
+const utf8 = new TextEncoder();
+
+/**
  * ‘한 반이 문서 하나’ 인 컬렉션을 다룹니다.
  *
- * 학생 명부(classes)와 선생님이 등록한 포트폴리오(portfolios)는 문서 안의
- * 목록 이름과 정렬만 다르고 나머지가 같아 여기서 한 벌만 만들어 씁니다.
+ * 학생 명부(classes)·선생님이 등록한 포트폴리오(portfolios)·세특(achievements)은
+ * 문서 안의 목록 이름과 정렬만 다르고 나머지가 같아 여기서 한 벌만 만들어 씁니다.
  *
  * @param {string} name    컬렉션 이름
  * @param {string} listKey 문서 안에서 목록이 들어 있는 칸 이름
@@ -323,33 +342,64 @@ function groupedCollection(name, listKey, sort) {
     return group.id;
   }
 
+  /** 그 반 문서를 저장할 모양으로 만듭니다. 비었으면 null(문서를 지웁니다). */
+  function payloadOf(key) {
+    const group = findDoc(key);
+    if (!group || group[listKey].length === 0) return null;
+
+    // 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
+    group[listKey].sort(sort);
+
+    return {
+      schoolYear: group.schoolYear,
+      grade: group.grade,
+      classNo: group.classNo,
+      [listKey]: group[listKey],
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * 한도를 넘는 반이 있는지 먼저 봅니다.
+   *
+   * 나누어 보내는 중간에 걸리면 일부만 저장되므로, 한 건도 보내기 전에 검사합니다.
+   */
+  function checkSize(payloads) {
+    for (const [key, payload] of payloads) {
+      if (!payload) continue;
+
+      const size = utf8.encode(JSON.stringify(payload)).length;
+      if (size <= DOC_LIMIT) continue;
+
+      const [, grade, classNo] = key.split("-");
+      throw new Error(
+        `${grade}학년 ${classNo}반에 담긴 내용이 너무 많습니다` +
+          `(${Math.round(size / 1024)}KB, 한 반에 ${Math.round(DOC_LIMIT / 1024)}KB 까지).` +
+          " 다른 반과 나누어 올리거나 오래된 자료를 지운 뒤 다시 시도해주세요."
+      );
+    }
+  }
+
   /** 바뀐 반 문서만 통째로 다시 씁니다. 빈 반은 문서를 지웁니다. */
   async function commit(keys) {
     const list = [...keys].filter(Boolean);
     if (list.length === 0) return;
 
+    const payloads = list.map((key) => [key, payloadOf(key)]);
+    checkSize(payloads);
+
     const emptied = [];
 
-    await commitInChunks(list, (batch, key) => {
+    await commitInChunks(payloads, (batch, [key, payload]) => {
       const ref = doc(collectionRef(name), key);
-      const group = findDoc(key);
 
-      if (!group || group[listKey].length === 0) {
+      if (!payload) {
         batch.delete(ref);
         emptied.push(key);
         return;
       }
 
-      // 정렬해 두면 사람이 콘솔에서 열어 봐도 읽을 만합니다.
-      group[listKey].sort(sort);
-
-      batch.set(ref, {
-        schoolYear: group.schoolYear,
-        grade: group.grade,
-        classNo: group.classNo,
-        [listKey]: group[listKey],
-        updatedAt: new Date().toISOString(),
-      });
+      batch.set(ref, payload);
     });
 
     if (emptied.length) {
@@ -374,6 +424,10 @@ function groupedCollection(name, listKey, sort) {
    */
   async function save(changes) {
     const dirty = new Set();
+
+    // 저장에 실패하면 화면에는 있고 서버에는 없는 자료가 생깁니다.
+    // 되돌릴 수 있도록 지금 모습을 적어 둡니다(목록만 새로 만들면 됩니다).
+    const before = docs().map((group) => ({ ...group, [listKey]: [...(group[listKey] ?? [])] }));
 
     // 색인은 한 번만 만들고 바뀐 만큼 따라 고칩니다.
     // 900건을 한 번에 넣을 때 반복마다 다시 만들면 너무 느립니다.
@@ -415,7 +469,15 @@ function groupedCollection(name, listKey, sort) {
 
     invalidate();
     notifyChange();
-    await commit(dirty);
+
+    try {
+      await commit(dirty);
+    } catch (error) {
+      cache[name] = before;
+      invalidate();
+      notifyChange();
+      throw error;
+    }
   }
 
   return { rows, byId, findDoc, save, invalidate };
@@ -424,19 +486,20 @@ function groupedCollection(name, listKey, sort) {
 const byStudentNo = (a, b) => (a.studentNo ?? 0) - (b.studentNo ?? 0);
 
 /** 반 단위로 묶인 컬렉션. 휴지통 함수들이 이름으로 찾아 씁니다. */
+const byCreatedAt = (a, b) =>
+  byStudentNo(a, b) || String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""));
+
 const grouped = {
   classes: groupedCollection("classes", "students", byStudentNo),
-  portfolios: groupedCollection(
-    "portfolios",
-    "entries",
-    (a, b) => byStudentNo(a, b) || String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""))
-  ),
+  portfolios: groupedCollection("portfolios", "entries", byCreatedAt),
+  achievements: groupedCollection("achievements", "entries", byCreatedAt),
 };
 
 /** 휴지통 함수들이 쓰는 이름 → 컬렉션. 학생은 반 문서(classes) 안에 있습니다. */
 const GROUPED_BY_TRASH_NAME = {
   students: grouped.classes,
   portfolios: grouped.portfolios,
+  achievements: grouped.achievements,
 };
 
 /* -------- 상담 기록(문서 하나씩) -------- */
@@ -567,6 +630,7 @@ export const trash = {
   students: () => grouped.classes.rows().filter((row) => row.deletedAt),
   sessions: () => cache.sessions.filter((row) => row.deletedAt),
   portfolios: () => grouped.portfolios.rows().filter((row) => row.deletedAt),
+  achievements: () => grouped.achievements.rows().filter((row) => row.deletedAt),
 };
 
 /* =========================================================
@@ -685,6 +749,62 @@ export const teacherPortfolios = {
   update(id, fields) {
     send(
       grouped.portfolios.save([
+        { id, fields: { ...fields, updatedAt: new Date().toISOString() } },
+      ])
+    );
+  },
+};
+
+/**
+ * 세특 및 활동 — 선생님이 엑셀로 올리거나 직접 적어 넣습니다.
+ *
+ * 항목 하나가 세특 한 줄입니다. 엑셀에서 읽은 ‘모르는 칸’ 은 extras 에
+ * [{ label, value }] 로 차례대로 담아 두었다가 내보낼 때 그대로 돌려줍니다.
+ * 바이트 수는 저장하지 않고 내용에서 그때그때 셉니다(내용을 고쳐도 어긋나지 않습니다).
+ */
+export const teacherAchievements = {
+  /** 휴지통에 없는 항목. 자리(학년도·학년·반·번호)가 함께 붙어 있습니다. */
+  all() {
+    return grouped.achievements.rows().filter((row) => !row.deletedAt);
+  },
+  find(id) {
+    const row = grouped.achievements.byId().get(id) ?? null;
+    return row && !row.deletedAt ? row : null;
+  },
+  forStudent(studentId) {
+    return teacherAchievements.all().filter((row) => row.studentId === studentId);
+  },
+  /** 휴지통에 있는 것까지 포함한 그 학생의 항목 번호(학생을 완전히 지울 때 씁니다). */
+  allIdsForStudent(studentId) {
+    return grouped.achievements
+      .rows()
+      .filter((row) => row.studentId === studentId)
+      .map((row) => row.id);
+  },
+  /** 새 항목에 들어갈 값. */
+  fields({ studentId, studentName, content, extras = [], source = null }) {
+    const now = new Date().toISOString();
+    return {
+      studentId,
+      studentName,
+      content,
+      extras,
+      source,
+      createdAt: now,
+      updatedAt: now,
+    };
+  },
+  /**
+   * 여러 건을 한 번에 저장합니다. 같은 반은 문서 한 번으로 묶입니다.
+   * 실패하면 예외를 던지므로 부르는 쪽에서 기다렸다가 알려주세요(엑셀 업로드).
+   */
+  save(changes) {
+    return grouped.achievements.save(changes);
+  },
+  /** 화면에서 곧바로 부르는 길이라 실패를 여기서 알립니다. */
+  update(id, fields) {
+    send(
+      grouped.achievements.save([
         { id, fields: { ...fields, updatedAt: new Date().toISOString() } },
       ])
     );

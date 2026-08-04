@@ -20,8 +20,8 @@ export const meta = {
   // 휴지통은 모든 자료를 훑어야 합니다.
   // 낸 사람 이름은 제출물 안에 함께 들어 있어 profiles 까지 볼 필요는 없습니다.
   needs: ["submissions", "portfolios"],
-  // 선생님이 등록한 포트폴리오도 휴지통을 거칩니다.
-  owns: ["portfolios"],
+  // 선생님이 등록한 포트폴리오와 세특도 휴지통을 거칩니다.
+  owns: ["portfolios", "achievements"],
 };
 
 // 보관 기간이 지난 것 정리는 이 화면을 열 때 한 번만 합니다.
@@ -31,6 +31,7 @@ let purged = false;
 const KIND_BADGE = {
   "학생": "badge--danger",
   "상담 기록": "",
+  "세특": "badge--muted",
   "공지": "badge--muted",
   "과제": "badge--muted",
   "제출물": "badge--muted",

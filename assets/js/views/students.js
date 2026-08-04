@@ -603,7 +603,7 @@ export function render(container) {
         `${names.slice(0, 5).join(", ")}${names.length > 5 ? ` 외 ${names.length - 5}명` : ""}` +
         ` 학생 ${chosen.length}명을 삭제할까요?\n` +
         (sessionCount ? `상담 기록 ${sessionCount}건도 함께 지워집니다.\n` : "") +
-        "선생님이 등록한 포트폴리오도 함께 들어갑니다.\n" +
+        "선생님이 등록한 포트폴리오와 세특도 함께 들어갑니다.\n" +
         `휴지통으로 들어가며 ${TRASH_DAYS}일 안에는 되살릴 수 있습니다.`,
       confirmLabel: "삭제",
     });
