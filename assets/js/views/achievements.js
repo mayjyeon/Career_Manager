@@ -225,12 +225,18 @@ const PLAN_STATUS = {
 };
 
 function planRow(row) {
-  const seat = row.grade == null ? "—" : `${row.grade}학년 ${row.classNo}반 ${row.studentNo}번`;
+  const seat =
+    row.grade == null || row.classNo == null || row.studentNo == null
+      ? "—"
+      : `${row.grade}학년 ${row.classNo}반 ${row.studentNo}번`;
+
+  // 학번 칸이 없는 파일이면 학년·반·번호를 모아 5자리로 만들어 보여 줍니다.
+  const studentNumber = formatStudentNumber(row) || row.rawNumber || "—";
 
   return `
     <tr>
       <td>${PLAN_STATUS[row.status]}</td>
-      <td class="nowrap">${esc(row.rawNumber || "—")}</td>
+      <td class="nowrap">${esc(studentNumber)}</td>
       <td class="nowrap">${esc(seat)}</td>
       <td class="nowrap">${esc(row.student?.name || row.name || "—")}</td>
       <td class="num nowrap">${number(byteLength(row.content))}</td>
@@ -241,8 +247,9 @@ function planRow(row) {
     </tr>`;
 }
 
-function previewBody(entries, years) {
-  const year = years[0] ?? new Date().getFullYear();
+function previewBody(parsed, years) {
+  const { entries, context } = parsed;
+  const year = context.schoolYear ?? years[0] ?? new Date().getFullYear();
 
   // 파일에서 찾아낸 ‘모르는 칸’ 을 알려 줍니다.
   const extras = [];
@@ -252,25 +259,51 @@ function previewBody(entries, years) {
     }
   }
 
+  // 표 안에 학년·반 칸이 없는 줄이 있으면 여기서 채워야 합니다.
+  const needsGrade = entries.some((entry) => entry.grade == null);
+  const needsClass = entries.some((entry) => entry.classNo == null);
+
+  const yearOptions = [...new Set([year, ...years])].sort((a, b) => b - a);
+
   return `
-    <div class="field">
-      <label class="field__label" for="a-year">학년도</label>
-      ${
-        years.length
-          ? `<select class="select" id="a-year" name="schoolYear">
-               ${years
-                 .map(
-                   (value) =>
-                     `<option value="${value}" ${value === year ? "selected" : ""}>
-                        ${value}학년도
-                      </option>`
-                 )
-                 .join("")}
-             </select>`
-          : `<input class="input" id="a-year" name="schoolYear" inputmode="numeric" value="${year}" />`
-      }
-      <p class="caption">이 학년도의 명렬표에서 학번에 해당하는 학생을 찾습니다.</p>
+    <div class="form-grid form-grid--3">
+      <div class="field">
+        <label class="field__label" for="a-year">학년도</label>
+        ${
+          years.length
+            ? `<select class="select" id="a-year" name="schoolYear">
+                 ${yearOptions
+                   .map(
+                     (value) =>
+                       `<option value="${value}" ${value === year ? "selected" : ""}>
+                          ${value}학년도
+                        </option>`
+                   )
+                   .join("")}
+               </select>`
+            : `<input class="input" id="a-year" name="schoolYear" inputmode="numeric" value="${year}" />`
+        }
+      </div>
+      <div class="field">
+        <label class="field__label" for="a-grade">학년</label>
+        <input class="input" id="a-grade" name="grade" inputmode="numeric"
+               value="${context.grade ?? ""}" placeholder="${needsGrade ? "예: 1" : "파일에서 읽음"}" />
+      </div>
+      <div class="field">
+        <label class="field__label" for="a-class">반</label>
+        <input class="input" id="a-class" name="classNo" inputmode="numeric"
+               value="${context.classNo ?? ""}" placeholder="${needsClass ? "예: 3" : "파일에서 읽음"}" />
+      </div>
     </div>
+    <p class="caption" style="margin-top:-4px">
+      ${
+        needsGrade || needsClass
+          ? `엑셀에 ${[needsGrade && "학년", needsClass && "반"]
+              .filter(Boolean)
+              .join("·")} 칸이 없는 줄이 있습니다. 여기 적은 값으로 채웁니다.`
+          : "엑셀에 있는 학년·반을 씁니다. 비어 있는 줄에만 여기 값을 씁니다."
+      }
+    </p>
     ${
       extras.length
         ? `<p class="caption">
@@ -282,9 +315,9 @@ function previewBody(entries, years) {
     <div data-plan></div>`;
 }
 
-/** 고른 학년도에 맞춰 미리보기 표를 다시 그립니다. */
-function renderPlan(form, entries, schoolYear) {
-  const plan = buildAchievementPlan(entries, schoolYear, (seat) =>
+/** 고른 학년도·학년·반에 맞춰 미리보기 표를 다시 그립니다. */
+function renderPlan(form, entries, defaults) {
+  const plan = buildAchievementPlan(entries, defaults, (seat) =>
     studentService.findSeatItem(seat)
   );
 
@@ -319,8 +352,8 @@ function openImportPreview(parsed, onSaved) {
     subtitle:
       parsed.sheets.length > 1
         ? `시트 ${parsed.sheets.length}개(${parsed.sheets.join(", ")})를 함께 읽었습니다.`
-        : "학번으로 학생을 찾아 붙입니다. 확인한 뒤 등록하세요.",
-    body: previewBody(parsed.entries, years),
+        : "학번(또는 학년·반·번호)으로 학생을 찾아 붙입니다. 확인한 뒤 등록하세요.",
+    body: previewBody(parsed, years),
     actions: [
       { label: "취소", variant: "secondary", value: "cancel" },
       { label: "등록", variant: "primary", value: "submit" },
@@ -357,14 +390,24 @@ function openImportPreview(parsed, onSaved) {
     },
   });
 
-  const yearField = form.elements.schoolYear;
-  const refresh = () => {
-    const year = Number.parseInt(yearField.value, 10);
-    plan = renderPlan(form, parsed.entries, Number.isNaN(year) ? null : year);
+  const intOf = (name) => {
+    const value = Number.parseInt(form.elements[name].value, 10);
+    return Number.isNaN(value) ? null : value;
   };
 
-  yearField.addEventListener("change", refresh);
-  yearField.addEventListener("input", refresh);
+  const refresh = () => {
+    plan = renderPlan(form, parsed.entries, {
+      schoolYear: intOf("schoolYear"),
+      grade: intOf("grade"),
+      classNo: intOf("classNo"),
+    });
+  };
+
+  for (const name of ["schoolYear", "grade", "classNo"]) {
+    form.elements[name].addEventListener("change", refresh);
+    form.elements[name].addEventListener("input", refresh);
+  }
+
   refresh();
 }
 
@@ -372,8 +415,18 @@ async function handleFile(file, onSaved) {
   try {
     const parsed = parseAchievementWorkbook(await readSpreadsheet(file));
 
+    // 무엇이 없어서 못 읽었는지 그대로 알려 줍니다.
+    if (parsed.missing?.length) {
+      toast(
+        `${parsed.missing.join(" 과 ")} 칸을 찾지 못했습니다. ` +
+          "학번 한 칸이거나 반·번호 두 칸이면 읽을 수 있습니다.",
+        "error"
+      );
+      return;
+    }
+
     if (parsed.entries.length === 0) {
-      toast("‘학번’ 과 ‘세특 내용’ 칸을 찾지 못했습니다. 머리글 이름을 확인해주세요.", "error");
+      toast("엑셀에서 읽을 내용을 찾지 못했습니다.", "error");
       return;
     }
 
