@@ -63,8 +63,11 @@ function classStats(rows) {
 /* =========================================================
    화면
    ========================================================= */
-export function render(container) {
-  const all = counselingService.getAll();
+export function render(container, { navigate }) {
+  // 학생이 지워졌는데 남은 기록은 세지 않습니다. 함께 세면 건수·시간·상담 학생 수가
+  // 부풀려지고, 학년·반별 표에서는 어차피 자리를 몰라 빠집니다.
+  const all = counselingService.getLinked();
+  const orphans = counselingService.getOrphans();
 
   const years = [
     ...new Set(all.map((s) => schoolYearOf(s.sessionDate)).filter((y) => y != null)),
@@ -98,6 +101,18 @@ export function render(container) {
         </select>
       </div>
     </div>
+
+    ${
+      orphans.length
+        ? `<section class="card card--quiet" style="margin-bottom:16px">
+             <h2 class="section-title">주인 없는 상담 기록 ${orphans.length}건은 빼고 셌습니다</h2>
+             <p class="muted" style="margin:8px 0 12px">
+               학생이 지워졌는데 기록만 남아 있습니다. 상담일지 화면에서 정리할 수 있습니다.
+             </p>
+             <button class="btn btn--secondary" data-go="counseling">상담일지에서 정리하기</button>
+           </section>`
+        : ""
+    }
 
     ${
       rows.length === 0
@@ -193,12 +208,14 @@ export function render(container) {
     </section>`
     }`;
 
+  on(container, "[data-go]", (button) => navigate(button.dataset.go));
+
   on(
     container,
     "#stat-year",
     (select) => {
       state.year = Number.parseInt(select.value, 10);
-      render(container);
+      render(container, { navigate });
     },
     "change"
   );
